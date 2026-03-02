@@ -1,0 +1,84 @@
+/* ── Reset & base ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Newsreader', Georgia, serif;
+  background: #F5F0E8;
+  color: #2C2416;
+  min-height: 100vh;
+  min-height: 100dvh; /* dynamic viewport height for mobile */
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ── Safe area padding for notched phones ── */
+.app-container {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* ── Touch-friendly ── */
+button, select, input, textarea {
+  font-family: inherit;
+  touch-action: manipulation;
+  -webkit-appearance: none;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:active {
+  transform: scale(0.97);
+  transition: transform 0.08s ease;
+}
+
+input, textarea, select {
+  font-size: 16px; /* prevents iOS zoom on focus */
+  border-radius: 0; /* resets iOS default */
+}
+
+/* ── Scrollbar styling ── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D9CEBD;
+  border-radius: 4px;
+}
+
+/* ── Selection ── */
+::selection {
+  background: #3D6B5044;
+}
+
+/* ── Disable pull-to-refresh on PWA ── */
+@media (display-mode: standalone) {
+  body {
+    overscroll-behavior-y: contain;
+  }
+}
