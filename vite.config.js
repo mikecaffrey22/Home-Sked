@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Home Sked — Maintenance Tracker',
-        short_name: 'Home Sked',
+        name: 'Maintainly — Maintenance Tracking',
+        short_name: 'Maintainly',
         description: 'Track and schedule home maintenance tasks',
         theme_color: '#3D6B50',
         background_color: '#F5F0E8',
