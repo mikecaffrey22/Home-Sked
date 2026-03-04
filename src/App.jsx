@@ -334,9 +334,14 @@ export default function App() {
     if (error) { setAuthError(error.message); return; }
     if (data?.user?.identities?.length === 0) { setAuthError("An account with this email already exists."); return; }
     if (data?.session) {
-      // Email confirmation is off — user is signed in immediately
       setUser(data.user);
+      if (homes.length === 0) {
+        const h = { id: genId(), name: "My Home", icon: "🏡", systems: [] };
+        setHomes([h]);
+        setActiveHomeId(h.id);
+      }
       setOnboarded(true);
+      localStorage.setItem(ONBOARDED_KEY, "true");
       setView("dashboard");
       showToast("Account created ✓");
     } else {
@@ -349,7 +354,18 @@ export default function App() {
     setAuthLoading(false);
     if (error) { setAuthError(error.message); return; }
     setUser(data.user);
+    // Load cloud data or create default home
+    const cloudData = await loadFromCloud(data.user.id);
+    if (cloudData && cloudData.length > 0) {
+      setHomes(cloudData);
+      setActiveHomeId(cloudData[0]?.id);
+    } else if (homes.length === 0) {
+      const h = { id: genId(), name: "My Home", icon: "🏡", systems: [] };
+      setHomes([h]);
+      setActiveHomeId(h.id);
+    }
     setOnboarded(true);
+    localStorage.setItem(ONBOARDED_KEY, "true");
     setView("dashboard");
     showToast("Signed in ✓");
   };
