@@ -315,7 +315,8 @@ export default function App() {
   // ── Cloud sync helpers ──
   const loadFromCloud = async (uid) => {
     try {
-      const { data, error } = await supabase.from("user_data").select("homes").eq("user_id", uid).single();
+      const { data, error } = await supabase.from("user_data").select("homes").eq("user_id", uid).maybeSingle();
+      if (error) { console.error("Cloud load error:", error); return null; }
       if (data && data.homes) return migrate({ homes: data.homes });
     } catch (e) { console.error("Cloud load error:", e); }
     return null;
@@ -351,19 +352,29 @@ export default function App() {
   const handleLogin = async () => {
     setAuthError(""); setAuthLoading(true);
     const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass });
-    setAuthLoading(false);
-    if (error) { setAuthError(error.message); return; }
+    if (error) { setAuthError(error.message); setAuthLoading(false); return; }
     setUser(data.user);
-    // Load cloud data or create default home
-    const cloudData = await loadFromCloud(data.user.id);
-    if (cloudData && cloudData.length > 0) {
-      setHomes(cloudData);
-      setActiveHomeId(cloudData[0]?.id);
-    } else if (homes.length === 0) {
-      const h = { id: genId(), name: "My Home", icon: "🏡", systems: [] };
-      setHomes([h]);
-      setActiveHomeId(h.id);
+    // Try cloud load with 5s timeout — don't block sign-in on failure
+    try {
+      const cloudPromise = loadFromCloud(data.user.id);
+      const timeout = new Promise(r => setTimeout(() => r(null), 5000));
+      const cloudData = await Promise.race([cloudPromise, timeout]);
+      if (cloudData && cloudData.length > 0) {
+        setHomes(cloudData);
+        setActiveHomeId(cloudData[0]?.id);
+      } else if (homes.length === 0) {
+        const h = { id: genId(), name: "My Home", icon: "🏡", systems: [] };
+        setHomes([h]);
+        setActiveHomeId(h.id);
+      }
+    } catch (e) {
+      if (homes.length === 0) {
+        const h = { id: genId(), name: "My Home", icon: "🏡", systems: [] };
+        setHomes([h]);
+        setActiveHomeId(h.id);
+      }
     }
+    setAuthLoading(false);
     setOnboarded(true);
     localStorage.setItem(ONBOARDED_KEY, "true");
     setView("dashboard");
@@ -398,7 +409,6 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
-        // Load cloud data and merge if newer
         loadFromCloud(session.user.id).then(cloudData => {
           if (cloudData && cloudData.length > 0) {
             setHomes(cloudData);
@@ -406,7 +416,7 @@ export default function App() {
             setOnboarded(true);
             setShowLanding(false);
           }
-        });
+        }).catch(() => {});
       }
     });
 
@@ -414,17 +424,18 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
         setUser(session.user);
-        const cloudData = await loadFromCloud(session.user.id);
-        if (cloudData && cloudData.length > 0) {
-          setHomes(cloudData);
-          setActiveHomeId(cloudData[0]?.id);
-          setOnboarded(true);
-          setShowLanding(false);
-        } else {
-          // First login — push local data to cloud
-          const local = loadData();
-          if (local.length > 0) await saveToCloud(session.user.id, local);
-        }
+        try {
+          const cloudData = await loadFromCloud(session.user.id);
+          if (cloudData && cloudData.length > 0) {
+            setHomes(cloudData);
+            setActiveHomeId(cloudData[0]?.id);
+            setOnboarded(true);
+            setShowLanding(false);
+          } else {
+            const local = loadData();
+            if (local.length > 0) await saveToCloud(session.user.id, local);
+          }
+        } catch (e) { console.error("Auth sync error:", e); }
       } else {
         setUser(null);
       }
