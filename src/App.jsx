@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "./supabase";
 
-const STORAGE_KEY = "upkeep-data-v1";
-const ONBOARDED_KEY = "upkeep-onboarded";
-const OLD_STORAGE_KEY = "homesked-data-v3";
-const OLD_ONBOARDED_KEY = "homesked-onboarded";
+const STORAGE_KEY = "maintainly-data-v1";
+const ONBOARDED_KEY = "maintainly-onboarded";
+const OLD_STORAGE_KEY = "upkeep-data-v1";
+const OLD_ONBOARDED_KEY = "upkeep-onboarded";
+const LEGACY_STORAGE_KEY = "homesked-data-v3";
+const LEGACY_ONBOARDED_KEY = "homesked-onboarded";
 
 // ── System templates ────────────────────────────────────────────────
 const SYSTEM_TEMPLATES = [
@@ -170,7 +172,7 @@ const CATEGORIES = ["All", "Air Quality", "HVAC", "Plumbing", "Septic / Wastewat
 // ── Affiliate config ────────────────────────────────────────────────
 // Set your affiliate tags here once approved. Leave blank until then.
 const AFFILIATE = {
-  amazon: "upkeep20-20",       // Amazon Associates tag
+  amazon: "maintainly-20",       // Amazon Associates tag
   homeDepot: "",    // e.g., your Impact Radius affiliate ID
   lowes: "",        // e.g., your affiliate ID
 };
@@ -206,7 +208,7 @@ const migrate = (raw) => {
   if (raw.homes) return raw.homes.map(h => ({ ...h, systems: h.systems.map(s => ({ ...s, tasks: s.tasks.map(migTask) })) }));
   return [];
 };
-const loadData = () => { try { const r = localStorage.getItem(STORAGE_KEY); if (r) return migrate(JSON.parse(r)); const old3 = localStorage.getItem(OLD_STORAGE_KEY); if (old3) return migrate(JSON.parse(old3)); const old2 = localStorage.getItem("homesked-data-v2"); if (old2) return migrate(JSON.parse(old2)); } catch(e) { console.error(e); } return []; };
+const loadData = () => { try { const r = localStorage.getItem(STORAGE_KEY); if (r) return migrate(JSON.parse(r)); const old1 = localStorage.getItem(OLD_STORAGE_KEY); if (old1) return migrate(JSON.parse(old1)); const old2 = localStorage.getItem(LEGACY_STORAGE_KEY); if (old2) return migrate(JSON.parse(old2)); const old3 = localStorage.getItem("homesked-data-v2"); if (old3) return migrate(JSON.parse(old3)); } catch(e) { console.error(e); } return []; };
 const saveData = (homes) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ homes })); } catch(e) { console.error(e); } };
 
 // ── Parts editor ────────────────────────────────────────────────────
@@ -305,6 +307,7 @@ export default function App() {
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [digestFreq, setDigestFreq] = useState("weekly");
   const [formSystem, setFormSystem] = useState({ name:"", icon:"🔧", category:"HVAC", notes:"" });
   const [formTask, setFormTask] = useState({ name:"", intervalMonths:12, notes:"", parts:[], taskType:"scheduled", season:"" });
   const [formHome, setFormHome] = useState({ name:"", icon:"🏡" });
@@ -325,6 +328,21 @@ export default function App() {
     try {
       await supabase.from("user_data").upsert({ user_id: uid, homes: homesData, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
     } catch (e) { console.error("Cloud save error:", e); }
+  };
+  const loadProfile = async (uid) => {
+    try {
+      const { data } = await supabase.from("profiles").select("digest_frequency").eq("id", uid).maybeSingle();
+      if (data?.digest_frequency) setDigestFreq(data.digest_frequency);
+    } catch (e) { console.error("Profile load error:", e); }
+  };
+  const saveDigestPref = async (freq) => {
+    setDigestFreq(freq);
+    if (user) {
+      try {
+        await supabase.from("profiles").update({ digest_frequency: freq }).eq("id", user.id);
+        showToast(freq === "off" ? "Digests turned off" : `${freq.charAt(0).toUpperCase() + freq.slice(1)} digest enabled ✓`);
+      } catch (e) { console.error("Profile save error:", e); }
+    }
   };
 
   // ── Auth handlers ──
@@ -378,6 +396,7 @@ export default function App() {
     setOnboarded(true);
     localStorage.setItem(ONBOARDED_KEY, "true");
     setView("dashboard");
+    loadProfile(data.user.id);
     showToast("Signed in ✓");
   };
   const handleForgot = async () => {
@@ -408,7 +427,7 @@ export default function App() {
     const localData = loadData();
     setHomes(localData);
     if (localData.length > 0) setActiveHomeId(localData[0].id);
-    const isReturning = localStorage.getItem(ONBOARDED_KEY)==="true" || localStorage.getItem(OLD_ONBOARDED_KEY)==="true" || localData.length > 0;
+    const isReturning = localStorage.getItem(ONBOARDED_KEY)==="true" || localStorage.getItem(OLD_ONBOARDED_KEY)==="true" || localStorage.getItem(LEGACY_ONBOARDED_KEY)==="true" || localData.length > 0;
     setOnboarded(isReturning);
     setShowLanding(!isReturning);
     setLoaded(true);
@@ -417,6 +436,7 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
         setUser(session.user);
+        loadProfile(session.user.id);
         loadFromCloud(session.user.id).then(cloudData => {
           if (cloudData && cloudData.length > 0) {
             setHomes(cloudData);
@@ -507,11 +527,11 @@ export default function App() {
   const upcomingCount = upcomingTaskList.length;
   const overdueTaskList = allTasks.filter(t=>{const d=daysUntil(getNextDue(t));return d!==null&&d<0;}).sort((a,b)=>daysUntil(getNextDue(a))-daysUntil(getNextDue(b)));
   const searchResults = searchQuery.trim().length>=2 ? allTasks.filter(t=>{const q=searchQuery.toLowerCase();return t.name.toLowerCase().includes(q)||t.systemName.toLowerCase().includes(q)||(t.notes||"").toLowerCase().includes(q)||(t.parts||[]).some(p=>p.name.toLowerCase().includes(q));}) : [];
-  const exportData = () => { const blob=new Blob([JSON.stringify({homes,exportedAt:new Date().toISOString()},null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`upkeep-backup-${new Date().toISOString().split("T")[0]}.json`; a.click(); URL.revokeObjectURL(url); showToast("Data exported ✓"); };
+  const exportData = () => { const blob=new Blob([JSON.stringify({homes,exportedAt:new Date().toISOString()},null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`maintainly-backup-${new Date().toISOString().split("T")[0]}.json`; a.click(); URL.revokeObjectURL(url); showToast("Data exported ✓"); };
   const importData = () => { const input=document.createElement("input"); input.type="file"; input.accept=".json"; input.onchange=(e)=>{const file=e.target.files[0]; if(!file)return; const reader=new FileReader(); reader.onload=(ev)=>{try{const data=JSON.parse(ev.target.result); if(data.homes){setHomes(data.homes);setActiveHomeId(data.homes[0]?.id);showToast("Data imported ✓");}else{showToast("Invalid file format");}}catch(err){showToast("Import failed");}}; reader.readAsText(file);}; input.click(); };
-  const addToCalendar = (task) => { const next=getNextDue(task); if(!next)return; const d=next.toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const end=new Date(next.getTime()+3600000).toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const url=`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent("Upkeep: "+task.name)}&dates=${d}/${end}&details=${encodeURIComponent(task.notes||"")}`; window.open(url,"_blank"); };
+  const addToCalendar = (task) => { const next=getNextDue(task); if(!next)return; const d=next.toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const end=new Date(next.getTime()+3600000).toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const url=`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent("Maintainly: "+task.name)}&dates=${d}/${end}&details=${encodeURIComponent(task.notes||"")}`; window.open(url,"_blank"); };
 
-  if (!loaded) return <div style={S.loadingWrap}><div style={S.loadingText}>Loading Upkeep…</div></div>;
+  if (!loaded) return <div style={S.loadingWrap}><div style={S.loadingText}>Loading Maintainly…</div></div>;
 
   // ═══ LANDING PAGE ═══
   if (showLanding && !onboarded) {
@@ -523,7 +543,7 @@ export default function App() {
           <div style={LP.heroInner}>
             <div style={LP.badge}>Maintenance Tracking for Everything You Own</div>
             <h1 style={LP.heroTitle}>Your home,<br/><em style={{fontStyle:"italic",color:K.accent}}>handled.</em></h1>
-            <p style={LP.heroSub}>Upkeep tracks every maintenance task, part, and due date for your home, vehicles, and boat — so nothing falls through the cracks.</p>
+            <p style={LP.heroSub}>Maintainly tracks every maintenance task, part, and due date for your home, vehicles, and boat — so nothing falls through the cracks.</p>
             <button style={LP.heroCta} onClick={()=>setShowLanding(false)}>Get Started — It's Free</button>
             <p style={LP.heroNote}>No account needed to start. <button style={{background:"transparent",border:"none",color:K.accent,textDecoration:"underline",fontSize:12,cursor:"pointer",fontFamily:sf,padding:0}} onClick={()=>{setShowLanding(false);setView("auth");}}>Sign in</button> to sync across devices.</p>
           </div>
@@ -540,7 +560,7 @@ export default function App() {
         {/* Solution */}
         <div style={{...LP.section,background:K.accentLight}}>
           <div style={LP.sectionInner}>
-            <h2 style={{...LP.sectionTitle,color:K.accent}}>Upkeep is your system.</h2>
+            <h2 style={{...LP.sectionTitle,color:K.accent}}>Maintainly is your system.</h2>
             <div style={LP.featureGrid}>
               <div style={LP.featureCard}>
                 <span style={LP.featureIcon}>📋</span>
@@ -592,7 +612,7 @@ export default function App() {
         <div style={{...LP.section,background:"#1A1A1A",color:"#fff"}}>
           <div style={{...LP.sectionInner,textAlign:"center"}}>
             <h2 style={{...LP.sectionTitle,color:"#fff"}}>Homes, cars, and boats don't maintain themselves.</h2>
-            <p style={{...LP.sectionText,color:"rgba(255,255,255,0.7)",maxWidth:500,margin:"0 auto"}}>Between your property, vehicles, and toys, you're spending thousands a year on upkeep. This app shows you exactly where that money goes — and helps you plan for it instead of getting surprised.</p>
+            <p style={{...LP.sectionText,color:"rgba(255,255,255,0.7)",maxWidth:500,margin:"0 auto"}}>Between your property, vehicles, and toys, you're spending thousands a year on maintenance. This app shows you exactly where that money goes — and helps you plan for it instead of getting surprised.</p>
           </div>
         </div>
 
@@ -608,7 +628,7 @@ export default function App() {
 
         {/* Footer */}
         <div style={LP.footer}>
-          <p style={LP.footerText}>Upkeep — Everything you own, maintained.</p>
+          <p style={LP.footerText}>Maintainly — Everything you own, maintained.</p>
         </div>
       </div>
     );
@@ -620,7 +640,7 @@ export default function App() {
     return (
       <div className="app-container" style={S.app}>
         <div style={S.onboard}>
-          <div style={S.onboardHero}><span style={{fontSize:56}}>△</span><h1 style={S.onboardTitle}>Upkeep</h1><p style={S.onboardSub}>Your home, handled. Pick the systems you own and we'll track every task, part, and due date — so nothing slips through the cracks.</p></div>
+          <div style={S.onboardHero}><span style={{fontSize:56}}>△</span><h1 style={S.onboardTitle}>Maintainly</h1><p style={S.onboardSub}>Your home, handled. Pick the systems you own and we'll track every task, part, and due date — so nothing slips through the cracks.</p></div>
           <div style={S.onboardTemplates}>
             {SYSTEM_TEMPLATES.map((tpl,i) => {
               const added = obSystems.some(s=>s.name===tpl.name);
@@ -648,7 +668,7 @@ export default function App() {
         <div style={S.headerInner}>
           <div style={S.logoRow} onClick={()=>{setView("dashboard");setSelectedSystem(null);setListView(null);}}>
             <span style={S.logoIcon}>△</span>
-            <div><h1 style={S.logoTitle}>Upkeep</h1><p style={S.logoSub}>Maintenance Tracking</p></div>
+            <div><h1 style={S.logoTitle}>Maintainly</h1><p style={S.logoSub}>Maintenance Tracking</p></div>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             {homes.length>1 && view==="dashboard" && (
@@ -680,6 +700,7 @@ export default function App() {
       {showAccount && user && (
         <div style={{position:"fixed",top:60,right:16,background:K.surface,border:`1.5px solid ${K.border}`,borderRadius:K.radius,boxShadow:"0 8px 24px rgba(0,0,0,0.18)",zIndex:200,minWidth:220,padding:6,display:"flex",flexDirection:"column",gap:2}}>
           <div style={{padding:"10px 14px",fontSize:13,color:K.textMuted,fontFamily:sf,borderBottom:`1px solid ${K.border}`}}>{user.email}</div>
+          <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("settings");}}>⚙️ Notification Settings</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);showToast("Synced ✓");}}>☁️ Sync Now</button>
           <button style={{...S.homeDropItem,color:K.danger}} onClick={handleLogout}>Sign Out</button>
         </div>
@@ -704,6 +725,35 @@ export default function App() {
               </div>
               <button style={{...S.authLink,marginTop:20,color:K.textMuted}} onClick={()=>setView("dashboard")}>Skip — continue without account</button>
             </div>
+          </div>
+        )}
+
+        {/* ═══ SETTINGS VIEW ═══ */}
+        {view==="settings"&&(
+          <div style={S.content}>
+            <button style={{...S.backBtn,marginBottom:16}} onClick={()=>setView("dashboard")}>← Back</button>
+            <h2 style={S.formTitle}>Notification Settings</h2>
+            {!user ? (
+              <div style={{textAlign:"center",padding:"40px 20px"}}>
+                <p style={{fontSize:15,color:K.textMuted,fontFamily:sf,marginBottom:16}}>Sign in to enable email notifications.</p>
+                <button style={S.submitBtn} onClick={()=>setView("auth")}>Sign In</button>
+              </div>
+            ) : (
+              <div>
+                <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,marginBottom:20,lineHeight:1.6}}>Get an email summary of upcoming and overdue maintenance tasks. We'll only email you when something needs attention.</p>
+                <div style={S.formGroup}>
+                  <label style={S.label}>Email Digest Frequency</label>
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    {[{v:"weekly",l:"Weekly"},{v:"monthly",l:"Monthly"},{v:"off",l:"Off"}].map(o=>(
+                      <button key={o.v} style={digestFreq===o.v?{...S.seasonBtnActive,flex:1,padding:"12px 8px",fontSize:14}:{...S.filterBtn,flex:1,padding:"12px 8px",fontSize:14}} onClick={()=>saveDigestPref(o.v)}>{o.l}</button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{marginTop:24,padding:"16px",background:K.accentLight,borderRadius:K.radius,fontSize:13,color:K.textMuted,fontFamily:sf,lineHeight:1.6}}>
+                  {digestFreq==="off" ? "Email notifications are turned off. You won't receive any digest emails." : `You'll receive a ${digestFreq} email at ${user.email} with a summary of tasks that are due or overdue.`}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
