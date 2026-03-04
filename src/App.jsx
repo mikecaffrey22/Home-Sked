@@ -541,26 +541,26 @@ export default function App() {
         {/* Hero */}
         <div style={LP.hero}>
           <div style={LP.heroInner}>
-            <div style={LP.badge}>Maintenance Tracking for Everything You Own</div>
-            <h1 style={LP.heroTitle}>Your home,<br/><em style={{fontStyle:"italic",color:K.accent}}>handled.</em></h1>
-            <p style={LP.heroSub}>Maintainly tracks every maintenance task, part, and due date for your home, vehicles, and boat — so nothing falls through the cracks.</p>
-            <button style={LP.heroCta} onClick={()=>setShowLanding(false)}>Get Started — It's Free</button>
-            <p style={LP.heroNote}>No account needed to start. <button style={{background:"transparent",border:"none",color:K.accent,textDecoration:"underline",fontSize:12,cursor:"pointer",fontFamily:sf,padding:0}} onClick={()=>{setShowLanding(false);setView("auth");}}>Sign in</button> to sync across devices.</p>
+            <div style={LP.badge}>△ Maintainly</div>
+            <h1 style={LP.heroTitle}>Your world,<br/><em style={{fontStyle:"italic",color:K.accent}}>maintained.</em></h1>
+            <p style={LP.heroSub}>One place to track every maintenance task, part, and due date across your home, vehicles, and boat. Nothing slips through the cracks again.</p>
+            <button style={LP.heroCta} onClick={()=>setShowLanding(false)}>Start for Free</button>
+            <p style={LP.heroNote}>No account required. <button style={{background:"transparent",border:"none",color:K.accent,textDecoration:"underline",fontSize:12,cursor:"pointer",fontFamily:sf,padding:0}} onClick={()=>{setShowLanding(false);setView("auth");}}>Sign in</button> to sync across devices.</p>
           </div>
         </div>
 
         {/* Problem */}
         <div style={LP.section}>
           <div style={LP.sectionInner}>
-            <h2 style={LP.sectionTitle}>Maintenance never stops</h2>
-            <p style={LP.sectionText}>Your furnace filter is 3 months overdue. The car's cabin air filter? You can't remember. The boat impeller should've been replaced before the season started. And the dryer vent hasn't been cleaned since you moved in. You don't forget because you don't care — you forget because there's no system.</p>
+            <h2 style={LP.sectionTitle}>You don't have a maintenance problem.<br/>You have a <em style={{fontStyle:"italic"}}>tracking</em> problem.</h2>
+            <p style={LP.sectionText}>The furnace filter is overdue. The car's cabin filter — you can't remember. The boat impeller should've been swapped before the season. The dryer vent hasn't been touched since you moved in. You don't forget because you don't care. You forget because there's no system.</p>
           </div>
         </div>
 
         {/* Solution */}
         <div style={{...LP.section,background:K.accentLight}}>
           <div style={LP.sectionInner}>
-            <h2 style={{...LP.sectionTitle,color:K.accent}}>Maintainly is your system.</h2>
+            <h2 style={{...LP.sectionTitle,color:K.accent}}>Maintainly is that system.</h2>
             <div style={LP.featureGrid}>
               <div style={LP.featureCard}>
                 <span style={LP.featureIcon}>📋</span>
@@ -575,22 +575,22 @@ export default function App() {
               <div style={LP.featureCard}>
                 <span style={LP.featureIcon}>🧰</span>
                 <h3 style={LP.featureTitle}>Parts & Cost Tracking</h3>
-                <p style={LP.featureText}>Every task lists what you need, what it costs, and whether you have it on hand. One-tap links to buy the right part.</p>
+                <p style={LP.featureText}>Every task lists what you need, what it costs, and whether you have it on hand. One-tap links to buy the exact right part.</p>
               </div>
               <div style={LP.featureCard}>
                 <span style={LP.featureIcon}>🏘️</span>
-                <h3 style={LP.featureTitle}>Multi-Home Support</h3>
-                <p style={LP.featureText}>Own a rental? A vacation home? Track maintenance across every property from a single dashboard.</p>
+                <h3 style={LP.featureTitle}>Multi-Property</h3>
+                <p style={LP.featureText}>Rental property. Vacation home. Primary residence. Track maintenance across every property from a single dashboard.</p>
               </div>
               <div style={LP.featureCard}>
                 <span style={LP.featureIcon}>📅</span>
-                <h3 style={LP.featureTitle}>Calendar Integration</h3>
-                <p style={LP.featureText}>Push any task straight to Google Calendar so it shows up where you actually look.</p>
+                <h3 style={LP.featureTitle}>Calendar Sync</h3>
+                <p style={LP.featureText}>Push any task to Google Calendar. It shows up where you already look — not buried in another app.</p>
               </div>
               <div style={LP.featureCard}>
-                <span style={LP.featureIcon}>📥</span>
-                <h3 style={LP.featureTitle}>Export & Backup</h3>
-                <p style={LP.featureText}>Download your entire maintenance history as a JSON file. Import it on any device. Your data is always yours.</p>
+                <span style={LP.featureIcon}>☁️</span>
+                <h3 style={LP.featureTitle}>Cloud Backup & Sync</h3>
+                <p style={LP.featureText}>Create a free account and your data syncs across every device. Export anytime — your maintenance history is always yours.</p>
               </div>
             </div>
           </div>
@@ -599,36 +599,36 @@ export default function App() {
         {/* How it works */}
         <div style={LP.section}>
           <div style={LP.sectionInner}>
-            <h2 style={LP.sectionTitle}>How it works</h2>
+            <h2 style={LP.sectionTitle}>Set up in under two minutes</h2>
             <div style={LP.stepsRow}>
               <div style={LP.step}><div style={LP.stepNum}>1</div><h3 style={LP.stepTitle}>Pick your systems</h3><p style={LP.stepText}>Choose from 22 templates — furnace, pool, EV, boat, generator, and more.</p></div>
-              <div style={LP.step}><div style={LP.stepNum}>2</div><h3 style={LP.stepTitle}>Set your dates</h3><p style={LP.stepText}>Tell us when you last did each task. We calculate when it's due next.</p></div>
-              <div style={LP.step}><div style={LP.stepNum}>3</div><h3 style={LP.stepTitle}>Stay on top of it</h3><p style={LP.stepText}>Check your dashboard, mark tasks done, and never wonder "when did I last…" again.</p></div>
+              <div style={LP.step}><div style={LP.stepNum}>2</div><h3 style={LP.stepTitle}>Set your dates</h3><p style={LP.stepText}>Tell us when you last did each task. We calculate when everything's due next.</p></div>
+              <div style={LP.step}><div style={LP.stepNum}>3</div><h3 style={LP.stepTitle}>Stay ahead</h3><p style={LP.stepText}>Check your dashboard, mark tasks done, get email digests. Never wonder "when did I last…" again.</p></div>
             </div>
           </div>
         </div>
 
-        {/* Annual cost */}
+        {/* Cost context */}
         <div style={{...LP.section,background:"#1A1A1A",color:"#fff"}}>
           <div style={{...LP.sectionInner,textAlign:"center"}}>
-            <h2 style={{...LP.sectionTitle,color:"#fff"}}>Homes, cars, and boats don't maintain themselves.</h2>
-            <p style={{...LP.sectionText,color:"rgba(255,255,255,0.7)",maxWidth:500,margin:"0 auto"}}>Between your property, vehicles, and toys, you're spending thousands a year on maintenance. This app shows you exactly where that money goes — and helps you plan for it instead of getting surprised.</p>
+            <h2 style={{...LP.sectionTitle,color:"#fff"}}>Everything you own costs money to maintain.</h2>
+            <p style={{...LP.sectionText,color:"rgba(255,255,255,0.65)",maxWidth:480,margin:"0 auto"}}>Between your property, vehicles, and equipment — you're spending thousands a year whether you plan for it or not. Maintainly shows you where that money goes and helps you stay ahead of it.</p>
           </div>
         </div>
 
         {/* Final CTA */}
         <div style={{...LP.section,paddingBottom:60}}>
           <div style={{...LP.sectionInner,textAlign:"center"}}>
-            <span style={{fontSize:48}}>△</span>
+            <span style={{fontSize:48,display:"block",marginBottom:8}}>△</span>
             <h2 style={{...LP.sectionTitle,marginTop:12}}>Ready to take control?</h2>
-            <p style={{...LP.sectionText,marginBottom:24}}>Set up your home, car, or boat in under 2 minutes. Free forever for a single property.</p>
+            <p style={{...LP.sectionText,marginBottom:28,maxWidth:400,margin:"0 auto 28px"}}>Set up your home, car, or boat in under 2 minutes. Free forever for a single property.</p>
             <button style={LP.heroCta} onClick={()=>setShowLanding(false)}>Get Started Free</button>
           </div>
         </div>
 
         {/* Footer */}
         <div style={LP.footer}>
-          <p style={LP.footerText}>Maintainly — Everything you own, maintained.</p>
+          <p style={LP.footerText}>Maintainly — Your world, maintained.</p>
         </div>
       </div>
     );
@@ -640,7 +640,7 @@ export default function App() {
     return (
       <div className="app-container" style={S.app}>
         <div style={S.onboard}>
-          <div style={S.onboardHero}><span style={{fontSize:56}}>△</span><h1 style={S.onboardTitle}>Maintainly</h1><p style={S.onboardSub}>Your home, handled. Pick the systems you own and we'll track every task, part, and due date — so nothing slips through the cracks.</p></div>
+          <div style={S.onboardHero}><span style={{fontSize:56}}>△</span><h1 style={S.onboardTitle}>Maintainly</h1><p style={S.onboardSub}>Pick the systems you own and we'll track every task, part, and due date — so nothing slips through the cracks.</p></div>
           <div style={S.onboardTemplates}>
             {SYSTEM_TEMPLATES.map((tpl,i) => {
               const added = obSystems.some(s=>s.name===tpl.name);
@@ -960,13 +960,13 @@ const S = {
 
   // ── Landing page styles ──
   lp: {
-    hero:{background:"linear-gradient(170deg, #F4F1EC 0%, #E6EFE9 100%)",padding:"60px 24px 50px",textAlign:"center"},
+    hero:{background:"linear-gradient(170deg, #F4F1EC 0%, #E6EFE9 100%)",padding:"72px 24px 56px",textAlign:"center"},
     heroInner:{maxWidth:560,margin:"0 auto"},
-    badge:{display:"inline-block",padding:"6px 16px",background:"rgba(45,90,61,0.08)",border:"1.5px solid rgba(45,90,61,0.15)",borderRadius:20,fontSize:12,fontWeight:600,color:K.accent,fontFamily:sf,letterSpacing:"0.5px",marginBottom:20},
-    heroTitle:{fontSize:48,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",lineHeight:1.1,color:K.text,margin:"0 0 20px",letterSpacing:"-0.5px"},
-    heroSub:{fontSize:17,color:K.textMuted,lineHeight:1.6,fontFamily:sf,margin:"0 auto 28px",maxWidth:440},
-    heroCta:{display:"inline-block",padding:"16px 40px",background:K.accent,color:"#fff",border:"none",borderRadius:12,fontSize:17,fontWeight:700,cursor:"pointer",fontFamily:sf,boxShadow:"0 4px 20px rgba(45,90,61,0.3)",letterSpacing:"0.3px"},
-    heroNote:{fontSize:12,color:K.textMuted,marginTop:14,fontFamily:sf},
+    badge:{display:"inline-block",padding:"8px 18px",background:"rgba(45,90,61,0.06)",border:"1.5px solid rgba(45,90,61,0.12)",borderRadius:24,fontSize:13,fontWeight:600,color:K.accent,fontFamily:"'Newsreader',Georgia,serif",letterSpacing:"0.3px",marginBottom:24},
+    heroTitle:{fontSize:52,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",lineHeight:1.08,color:K.text,margin:"0 0 22px",letterSpacing:"-0.5px"},
+    heroSub:{fontSize:17,color:K.textMuted,lineHeight:1.65,fontFamily:sf,margin:"0 auto 32px",maxWidth:440},
+    heroCta:{display:"inline-block",padding:"16px 44px",background:K.accent,color:"#fff",border:"none",borderRadius:12,fontSize:17,fontWeight:700,cursor:"pointer",fontFamily:sf,boxShadow:"0 4px 20px rgba(45,90,61,0.3)",letterSpacing:"0.3px",transition:"transform 0.15s ease"},
+    heroNote:{fontSize:12,color:K.textMuted,marginTop:16,fontFamily:sf},
     section:{padding:"50px 24px"},
     sectionInner:{maxWidth:640,margin:"0 auto"},
     sectionTitle:{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text,marginBottom:16,lineHeight:1.2},
