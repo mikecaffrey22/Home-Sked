@@ -392,6 +392,14 @@ export default function App() {
     await supabase.auth.signOut();
     setUser(null);
     setShowAccount(false);
+    setOnboarded(false);
+    setShowLanding(true);
+    setView("dashboard");
+    setSelectedSystem(null);
+    setAuthEmail("");
+    setAuthPass("");
+    setAuthError("");
+    showToast("Signed out");
   };
 
   // ── Init: check auth + load data ──
