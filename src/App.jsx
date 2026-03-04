@@ -568,7 +568,7 @@ export default function App() {
   }
 
   // ═══ ONBOARDING ═══
-  if (!onboarded) {
+  if (!onboarded && view !== "auth") {
     const obSystems = homes.length>0 ? homes[0].systems : [];
     return (
       <div className="app-container" style={S.app}>
