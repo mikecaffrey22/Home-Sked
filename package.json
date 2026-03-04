@@ -1,7 +1,7 @@
 {
-  "name": "upkeep",
+  "name": "maintainly",
   "version": "2.0.0",
-  "description": "Upkeep — Maintenance Tracking",
+  "description": "Maintainly — Maintenance Tracking",
   "private": true,
   "type": "module",
   "scripts": {
