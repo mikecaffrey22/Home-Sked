@@ -333,13 +333,25 @@ export default function App() {
     setAuthLoading(false);
     if (error) { setAuthError(error.message); return; }
     if (data?.user?.identities?.length === 0) { setAuthError("An account with this email already exists."); return; }
-    showToast("Check your email to confirm your account!");
+    if (data?.session) {
+      // Email confirmation is off — user is signed in immediately
+      setUser(data.user);
+      setOnboarded(true);
+      setView("dashboard");
+      showToast("Account created ✓");
+    } else {
+      showToast("Check your email to confirm your account!");
+    }
   };
   const handleLogin = async () => {
     setAuthError(""); setAuthLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass });
+    const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass });
     setAuthLoading(false);
-    if (error) setAuthError(error.message);
+    if (error) { setAuthError(error.message); return; }
+    setUser(data.user);
+    setOnboarded(true);
+    setView("dashboard");
+    showToast("Signed in ✓");
   };
   const handleForgot = async () => {
     setAuthError(""); setAuthLoading(true);
