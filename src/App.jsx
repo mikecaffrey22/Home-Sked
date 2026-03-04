@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { supabase } from "./supabase";
 
 const STORAGE_KEY = "upkeep-data-v1";
 const ONBOARDED_KEY = "upkeep-onboarded";
@@ -297,6 +298,13 @@ export default function App() {
   const [seasonFilter, setSeasonFilter] = useState("");
   const [showCompleteModal, setShowCompleteModal] = useState(null);
   const [toast, setToast] = useState(null);
+  const [user, setUser] = useState(null);
+  const [authView, setAuthView] = useState("login"); // login, signup, forgot
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPass, setAuthPass] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [formSystem, setFormSystem] = useState({ name:"", icon:"🔧", category:"HVAC", notes:"" });
   const [formTask, setFormTask] = useState({ name:"", intervalMonths:12, notes:"", parts:[], taskType:"scheduled", season:"" });
   const [formHome, setFormHome] = useState({ name:"", icon:"🏡" });
@@ -304,17 +312,104 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showLogModal, setShowLogModal] = useState(null);
 
+  // ── Cloud sync helpers ──
+  const loadFromCloud = async (uid) => {
+    try {
+      const { data, error } = await supabase.from("user_data").select("homes").eq("user_id", uid).single();
+      if (data && data.homes) return migrate({ homes: data.homes });
+    } catch (e) { console.error("Cloud load error:", e); }
+    return null;
+  };
+  const saveToCloud = async (uid, homesData) => {
+    try {
+      await supabase.from("user_data").upsert({ user_id: uid, homes: homesData, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    } catch (e) { console.error("Cloud save error:", e); }
+  };
+
+  // ── Auth handlers ──
+  const handleSignup = async () => {
+    setAuthError(""); setAuthLoading(true);
+    const { data, error } = await supabase.auth.signUp({ email: authEmail, password: authPass });
+    setAuthLoading(false);
+    if (error) { setAuthError(error.message); return; }
+    if (data?.user?.identities?.length === 0) { setAuthError("An account with this email already exists."); return; }
+    showToast("Check your email to confirm your account!");
+  };
+  const handleLogin = async () => {
+    setAuthError(""); setAuthLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({ email: authEmail, password: authPass });
+    setAuthLoading(false);
+    if (error) setAuthError(error.message);
+  };
+  const handleForgot = async () => {
+    setAuthError(""); setAuthLoading(true);
+    const { error } = await supabase.auth.resetPasswordForEmail(authEmail);
+    setAuthLoading(false);
+    if (error) { setAuthError(error.message); return; }
+    showToast("Password reset email sent!");
+    setAuthView("login");
+  };
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+    setShowAccount(false);
+  };
+
+  // ── Init: check auth + load data ──
   useEffect(() => {
-    const data = loadData();
-    setHomes(data);
-    if (data.length > 0) setActiveHomeId(data[0].id);
-    const isReturning = localStorage.getItem(ONBOARDED_KEY)==="true" || localStorage.getItem(OLD_ONBOARDED_KEY)==="true" || data.length > 0;
+    // Load local data first (always available offline)
+    const localData = loadData();
+    setHomes(localData);
+    if (localData.length > 0) setActiveHomeId(localData[0].id);
+    const isReturning = localStorage.getItem(ONBOARDED_KEY)==="true" || localStorage.getItem(OLD_ONBOARDED_KEY)==="true" || localData.length > 0;
     setOnboarded(isReturning);
     setShowLanding(!isReturning);
     setLoaded(true);
+
+    // Check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser(session.user);
+        // Load cloud data and merge if newer
+        loadFromCloud(session.user.id).then(cloudData => {
+          if (cloudData && cloudData.length > 0) {
+            setHomes(cloudData);
+            setActiveHomeId(cloudData[0]?.id);
+            setOnboarded(true);
+            setShowLanding(false);
+          }
+        });
+      }
+    });
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        const cloudData = await loadFromCloud(session.user.id);
+        if (cloudData && cloudData.length > 0) {
+          setHomes(cloudData);
+          setActiveHomeId(cloudData[0]?.id);
+          setOnboarded(true);
+          setShowLanding(false);
+        } else {
+          // First login — push local data to cloud
+          const local = loadData();
+          if (local.length > 0) await saveToCloud(session.user.id, local);
+        }
+      } else {
+        setUser(null);
+      }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
-  useEffect(() => { if (loaded) saveData(homes); }, [homes, loaded]);
+  // Save to localStorage AND cloud when data changes
+  useEffect(() => {
+    if (!loaded) return;
+    saveData(homes);
+    if (user) saveToCloud(user.id, homes);
+  }, [homes, loaded]);
 
   const showToast = useCallback((msg) => { setToast(msg); setTimeout(()=>setToast(null), 2500); }, []);
 
@@ -383,7 +478,7 @@ export default function App() {
             <h1 style={LP.heroTitle}>Your home,<br/><em style={{fontStyle:"italic",color:K.accent}}>handled.</em></h1>
             <p style={LP.heroSub}>Upkeep tracks every maintenance task, part, and due date for your home, vehicles, and boat — so nothing falls through the cracks.</p>
             <button style={LP.heroCta} onClick={()=>setShowLanding(false)}>Get Started — It's Free</button>
-            <p style={LP.heroNote}>No account needed. Your data stays on your device.</p>
+            <p style={LP.heroNote}>No account needed to start. <button style={{background:"transparent",border:"none",color:K.accent,textDecoration:"underline",fontSize:12,cursor:"pointer",fontFamily:sf,padding:0}} onClick={()=>{setShowLanding(false);setView("auth");}}>Sign in</button> to sync across devices.</p>
           </div>
         </div>
 
@@ -517,6 +612,7 @@ export default function App() {
             {view==="list"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setListView(null);}}>← Back</button>}
             {(view==="templates"||view==="manage-homes")&&<button style={S.backBtn} onClick={()=>setView("dashboard")}>← Back</button>}
             {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":"system");setEditingTask(null);}}>← Cancel</button>}
+            {view==="dashboard"&&<button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>}
           </div>
         </div>
       </header>
@@ -533,7 +629,37 @@ export default function App() {
         </div>
       )}
 
+      {/* Account dropdown */}
+      {showAccount && user && (
+        <div style={S.homeDropdown}>
+          <div style={{padding:"10px 14px",fontSize:13,color:K.textMuted,fontFamily:sf,borderBottom:`1px solid ${K.border}`}}>{user.email}</div>
+          <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);showToast("Synced ✓");}}>☁️ Sync Now</button>
+          <button style={{...S.homeDropItem,color:K.danger}} onClick={handleLogout}>Sign Out</button>
+        </div>
+      )}
+
       <main style={S.main}>
+        {/* ═══ AUTH VIEW ═══ */}
+        {view==="auth"&&(
+          <div style={S.content}>
+            <div style={{maxWidth:360,margin:"40px auto",textAlign:"center"}}>
+              <span style={{fontSize:40}}>△</span>
+              <h2 style={{...S.formTitle,marginTop:12,marginBottom:4}}>{authView==="signup"?"Create Account":authView==="forgot"?"Reset Password":"Sign In"}</h2>
+              <p style={{fontSize:13,color:K.textMuted,fontFamily:sf,marginBottom:24}}>{authView==="signup"?"Sync your data across devices.":authView==="forgot"?"We'll send you a reset link.":"Access your data anywhere."}</p>
+              {authError&&<div style={{background:K.danger+"12",border:`1px solid ${K.danger}33`,borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:13,color:K.danger,fontFamily:sf}}>{authError}</div>}
+              <div style={S.formGroup}><input style={S.input} type="email" value={authEmail} onChange={e=>{setAuthEmail(e.target.value);setAuthError("");}} placeholder="Email address"/></div>
+              {authView!=="forgot"&&<div style={S.formGroup}><input style={S.input} type="password" value={authPass} onChange={e=>{setAuthPass(e.target.value);setAuthError("");}} placeholder="Password" onKeyDown={e=>{if(e.key==="Enter"){authView==="login"?handleLogin():handleSignup();}}}/></div>}
+              <button style={{...S.submitBtn,opacity:authLoading?0.6:1}} disabled={authLoading||!authEmail.trim()||(authView!=="forgot"&&!authPass.trim())} onClick={()=>{authView==="login"?handleLogin():authView==="signup"?handleSignup():handleForgot();}}>{authLoading?"...":(authView==="signup"?"Create Account":authView==="forgot"?"Send Reset Link":"Sign In")}</button>
+              <div style={{marginTop:16,display:"flex",flexDirection:"column",gap:8}}>
+                {authView==="login"&&<><button style={S.authLink} onClick={()=>{setAuthView("signup");setAuthError("");}}>Don't have an account? Sign up</button><button style={S.authLink} onClick={()=>{setAuthView("forgot");setAuthError("");}}>Forgot password?</button></>}
+                {authView==="signup"&&<button style={S.authLink} onClick={()=>{setAuthView("login");setAuthError("");}}>Already have an account? Sign in</button>}
+                {authView==="forgot"&&<button style={S.authLink} onClick={()=>{setAuthView("login");setAuthError("");}}>Back to sign in</button>}
+              </div>
+              <button style={{...S.authLink,marginTop:20,color:K.textMuted}} onClick={()=>setView("dashboard")}>Skip — continue without account</button>
+            </div>
+          </div>
+        )}
+
         {/* ═══ DASHBOARD ═══ */}
         {view==="dashboard" && (
           <div style={S.content}>
@@ -732,6 +858,8 @@ const S = {
   seasonBtn:{padding:"6px 14px",border:`1.5px solid ${K.border}`,borderRadius:20,background:"transparent",color:K.textMuted,fontSize:12,cursor:"pointer",fontFamily:sf},
   seasonBtnActive:{padding:"6px 14px",border:`1.5px solid ${K.accent}`,borderRadius:20,background:K.accentLight,color:K.accent,fontSize:12,cursor:"pointer",fontWeight:600,fontFamily:sf},
   seasonBtnClear:{padding:"6px 14px",border:`1.5px solid ${K.border}`,borderRadius:20,background:"transparent",color:K.textMuted,fontSize:12,cursor:"pointer",fontFamily:sf},
+  accountBtn:{background:"rgba(255,255,255,0.12)",color:"#fff",border:"1px solid rgba(255,255,255,0.25)",borderRadius:8,padding:"6px 12px",fontSize:13,cursor:"pointer",fontFamily:sf,whiteSpace:"nowrap",fontWeight:500},
+  authLink:{background:"transparent",border:"none",color:K.accent,fontSize:13,cursor:"pointer",fontFamily:sf,textDecoration:"underline",padding:0},
 
   // ── Landing page styles ──
   lp: {
