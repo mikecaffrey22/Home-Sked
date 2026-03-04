@@ -640,7 +640,7 @@ export default function App() {
             {view==="list"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setListView(null);}}>← Back</button>}
             {(view==="templates"||view==="manage-homes")&&<button style={S.backBtn} onClick={()=>setView("dashboard")}>← Back</button>}
             {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":"system");setEditingTask(null);}}>← Cancel</button>}
-            {view==="dashboard"&&<button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>}
+            <button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>
           </div>
         </div>
       </header>
@@ -659,7 +659,7 @@ export default function App() {
 
       {/* Account dropdown */}
       {showAccount && user && (
-        <div style={S.homeDropdown}>
+        <div style={{position:"fixed",top:60,right:16,background:K.surface,border:`1.5px solid ${K.border}`,borderRadius:K.radius,boxShadow:"0 8px 24px rgba(0,0,0,0.18)",zIndex:200,minWidth:220,padding:6,display:"flex",flexDirection:"column",gap:2}}>
           <div style={{padding:"10px 14px",fontSize:13,color:K.textMuted,fontFamily:sf,borderBottom:`1px solid ${K.border}`}}>{user.email}</div>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);showToast("Synced ✓");}}>☁️ Sync Now</button>
           <button style={{...S.homeDropItem,color:K.danger}} onClick={handleLogout}>Sign Out</button>
