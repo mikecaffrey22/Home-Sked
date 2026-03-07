@@ -9,15 +9,16 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Maintainly — Maintenance Tracking',
-        short_name: 'Maintainly',
-        description: 'Track and schedule home maintenance tasks',
+        name: 'HomeSked — Your World, Maintained',
+        short_name: 'HomeSked',
+        description: 'Track and schedule home maintenance tasks across every system you own.',
         theme_color: '#3D6B50',
         background_color: '#F5F0E8',
         display: 'standalone',
         orientation: 'portrait',
         scope: '/',
         start_url: '/',
+        id: '/',
         icons: [
           {
             src: 'pwa-192x192.png',
