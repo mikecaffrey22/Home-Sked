@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "./supabase";
+const supabase = null;
 
 const STORAGE_KEY = "homesked-data-v3";
 const ONBOARDED_KEY = "homesked-onboarded";
