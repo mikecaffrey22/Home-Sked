@@ -435,7 +435,7 @@ export default function App() {
   const [formProvider, setFormProvider] = useState({ name:"", phone:"", email:"", specialty:"", notes:"", systemIds:[] });
   const [editingProvider, setEditingProvider] = useState(null);
   const [shareEmail, setShareEmail] = useState("");
-  const [notifEnabled, setNotifEnabled] = useState(() => Notification?.permission === "granted");
+  const [notifEnabled, setNotifEnabled] = useState(() => (typeof Notification !== "undefined" && Notification.permission === "granted"));
   const [customTemplates, setCustomTemplates] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-custom-templates")) || []; } catch(e) { return []; } });
   const [documents, setDocuments] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-docs")) || []; } catch(e) { return []; } });
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -686,7 +686,7 @@ export default function App() {
         if (next < new Date()) overdueCount++;
       })));
       updateBadge(overdueCount);
-      if (overdueCount > 0 && Notification.permission === "granted") {
+      if (overdueCount > 0 && (typeof Notification !== "undefined" && Notification.permission === "granted")) {
         const lastNotif = localStorage.getItem("homesked-last-notif");
         const today = new Date().toDateString();
         if (lastNotif !== today) {
@@ -902,7 +902,7 @@ export default function App() {
   });
 
   // Suggest push notifications if not enabled
-  if (typeof Notification !== "undefined" && Notification.permission !== "granted" && overdueTasks > 0 && !dismissedSuggestions.includes("enable-notifs")) {
+  if (typeof Notification !== "undefined" && (typeof Notification === "undefined" || Notification.permission !== "granted") && overdueTasks > 0 && !dismissedSuggestions.includes("enable-notifs")) {
     smartSuggestions.push({ type: "enable-notifs", reason: "Turn on notifications so you never miss an overdue task" });
   }
 
