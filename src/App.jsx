@@ -8,6 +8,8 @@ const OLD_ONBOARDED_KEY = "maintainly-onboarded";
 const LEGACY_STORAGE_KEY = "upkeep-data-v1";
 const LEGACY_ONBOARDED_KEY = "upkeep-onboarded";
 const THEME_KEY = "homesked-theme";
+const TIER_KEY = "homesked-tier";
+const STRIPE_LANDLORD_LINK = "https://buy.stripe.com/test_28E00bfD2c2hfrW9eB1Nu02";
 
 // ── System templates ────────────────────────────────────────────────
 const SYSTEM_TEMPLATES = [
@@ -427,6 +429,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [showLogModal, setShowLogModal] = useState(null);
   const [darkMode, setDarkMode] = useState(false);
+  const [userTier, setUserTier] = useState(() => { try { return localStorage.getItem(TIER_KEY) || "free"; } catch(e) { return "free"; } });
   const [partsFilter, setPartsFilter] = useState(null); // "on-hand" or "order"
   const [showCelebration, setShowCelebration] = useState(null);
   const [budget, setBudget] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-budget")) || { monthly: 0, spent: 0, entries: [] }; } catch(e) { return { monthly: 0, spent: 0, entries: [] }; } });
@@ -677,6 +680,13 @@ export default function App() {
     const savedTheme = localStorage.getItem(THEME_KEY);
     if (savedTheme === "dark") setDarkMode(true);
     setLoaded(true);
+    // Check for Stripe upgrade redirect
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("upgrade") === "success") {
+      setUserTier("landlord");
+      window.history.replaceState({}, "", window.location.pathname);
+      setTimeout(() => { setToast("🎉 Welcome to HomeSked Landlord! Multi-property unlocked."); setTimeout(()=>setToast(null), 4000); }, 500);
+    }
     // Badge + notification check
     const checkOverdue = () => {
       const ld = loadData();
@@ -747,6 +757,7 @@ export default function App() {
     if (user) saveToCloud(user.id, homes);
   }, [homes, loaded]);
   useEffect(() => { localStorage.setItem(THEME_KEY, darkMode ? "dark" : "light"); }, [darkMode]);
+  useEffect(() => { try { localStorage.setItem(TIER_KEY, userTier); } catch(e){} }, [userTier]);
   useEffect(() => { try { localStorage.setItem("homesked-budget", JSON.stringify(budget)); } catch(e){} }, [budget]);
   useEffect(() => { try { localStorage.setItem("homesked-providers", JSON.stringify(providers)); } catch(e){} }, [providers]);
   useEffect(() => { try { localStorage.setItem("homesked-shared", JSON.stringify(sharedUsers)); } catch(e){} }, [sharedUsers]);
@@ -766,6 +777,7 @@ export default function App() {
 
   // ── Home actions ──
   const addHome = () => {
+    if (userTier === "free" && homes.length >= 1) { setView("upgrade"); return; }
     const h = { id: genId(), name: formHome.name||"New Home", icon: formHome.icon||"🏡", systems: [] };
     setHomes(prev => [...prev, h]); setActiveHomeId(h.id); setFormHome({name:"",icon:"🏡"}); setView("dashboard"); showToast(`Added ${h.name}`);
   };
@@ -1388,7 +1400,7 @@ export default function App() {
             )}
             {view==="system"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setSelectedSystem(null);}}>← Back</button>}
             {view==="list"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setListView(null);setPartsFilter(null);}}>← Back</button>}
-            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview"||view==="health-score"||view==="cost-forecast"||view==="receipt-scan")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else if(view==="receipt-scan"){setReceiptScan(null);setView("dashboard");}else setView("dashboard");}}>← Back</button>}
+            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview"||view==="health-score"||view==="cost-forecast"||view==="receipt-scan"||view==="upgrade")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else if(view==="receipt-scan"){setReceiptScan(null);setView("dashboard");}else setView("dashboard");}}>← Back</button>}
             {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system"||view==="add-provider"||view==="edit-provider")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":view==="add-provider"||view==="edit-provider"?"providers":"system");setEditingTask(null);setEditingProvider(null);}}>← Cancel</button>}
             <button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>
           </div>
@@ -1404,7 +1416,7 @@ export default function App() {
           <div style={{borderTop:`1px solid ${K.border}`,margin:"4px 0"}}/>
           <button style={S.homeDropItem} onClick={()=>{setShowHomePicker(false);setView("portfolio");}}>🏘️ Portfolio View</button>
           <button style={S.homeDropItem} onClick={()=>{setShowHomePicker(false);setView("manage-homes");}}>⚙️ Manage Homes</button>
-          <button style={S.homeDropItem} onClick={()=>{setShowHomePicker(false);setFormHome({name:"",icon:"🏡"});setView("add-home");}}>+ Add Home</button>
+          <button style={S.homeDropItem} onClick={()=>{setShowHomePicker(false);if(userTier==="free"&&homes.length>=1){setView("upgrade");}else{setFormHome({name:"",icon:"🏡"});setView("add-home");}}}>+ Add Home</button>
         </div>
       )}
 
@@ -1426,6 +1438,8 @@ export default function App() {
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("cost-forecast");}}>📈 5-Year Forecast</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);handleReceiptFileSelect();}}>🧾 Scan Receipt</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);showToast("Synced ✓");}}>☁️ Sync Now</button>
+          {userTier==="free"&&<button style={{...S.homeDropItem,color:K.accent,fontWeight:600}} onClick={()=>{setShowAccount(false);setView("upgrade");}}>⭐ Upgrade to Landlord</button>}
+          {userTier==="landlord"&&<div style={{padding:"8px 14px",fontSize:11,color:K.accent,fontFamily:sf,fontWeight:600}}>⭐ Landlord Plan</div>}
           <button style={{...S.homeDropItem,color:K.danger}} onClick={handleLogout}>Sign Out</button>
         </div>
       )}
@@ -1600,7 +1614,7 @@ export default function App() {
                 <button style={S.templateLinkBtn} onClick={()=>setView("health-score")}>💚 Health Score</button>
                 <button style={S.templateLinkBtn} onClick={()=>setView("cost-forecast")}>📈 5-Year Forecast</button>
                 <button style={S.templateLinkBtn} onClick={handleReceiptFileSelect}>🧾 Scan Receipt</button>
-                <button style={S.templateLinkBtn} onClick={()=>setView("documents")}>📄 Documents{documents.length>0?" ("+documents.length+")":""}</button><button style={S.templateLinkBtn} onClick={()=>{setFormHome({name:"",icon:"🏡"});setView("add-home");}}>+ Add another home</button><button style={S.templateLinkBtn} onClick={exportData}>📥 Export</button><button style={S.templateLinkBtn} onClick={importData}>📤 Import</button></div>}
+                <button style={S.templateLinkBtn} onClick={()=>setView("documents")}>📄 Documents{documents.length>0?" ("+documents.length+")":""}</button><button style={S.templateLinkBtn} onClick={()=>{if(userTier==="free"&&homes.length>=1){setView("upgrade");}else{setFormHome({name:"",icon:"🏡"});setView("add-home");}}}>+ Add another home</button><button style={S.templateLinkBtn} onClick={exportData}>📥 Export</button><button style={S.templateLinkBtn} onClick={importData}>📤 Import</button></div>}
             </>}
           </div>
         )}
@@ -1622,7 +1636,7 @@ export default function App() {
 
         {/* ═══ MANAGE HOMES ═══ */}
         {view==="manage-homes"&&<div style={S.content}><h2 style={S.formTitle}>Manage Homes ({homes.length})</h2>
-          <button style={{...S.templateLinkBtn,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}} onClick={()=>setView("home-profile")}>🏠 Edit Property Details</button><div style={S.taskList}>{homes.map(h=><div key={h.id} style={S.taskCard}><div style={S.taskTop}><IconPicker icons={HOME_ICONS} value={h.icon} onChange={ic=>changeHomeIcon(h.id,ic)} K={K}/><div style={S.taskInfo}><div style={S.taskName}>{h.name}</div><div style={S.taskFreq}>{h.systems.length} system{h.systems.length!==1?"s":""}</div></div><div style={S.taskBtns}><button style={S.taskEditBtn} onClick={()=>{const n=prompt("Rename home:",h.name);if(n&&n.trim())renameHome(h.id,n.trim());}}>Rename</button>{homes.length>1&&<button style={S.taskDeleteBtn} onClick={()=>{if(confirm(`Delete "${h.name}" and all its systems?`))deleteHome(h.id);}}>×</button>}</div></div></div>)}</div><button style={{...S.submitBtn,marginTop:16}} onClick={()=>{setFormHome({name:"",icon:"🏡"});setView("add-home");}}>+ Add Home</button></div>}
+          <button style={{...S.templateLinkBtn,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}} onClick={()=>setView("home-profile")}>🏠 Edit Property Details</button><div style={S.taskList}>{homes.map(h=><div key={h.id} style={S.taskCard}><div style={S.taskTop}><IconPicker icons={HOME_ICONS} value={h.icon} onChange={ic=>changeHomeIcon(h.id,ic)} K={K}/><div style={S.taskInfo}><div style={S.taskName}>{h.name}</div><div style={S.taskFreq}>{h.systems.length} system{h.systems.length!==1?"s":""}</div></div><div style={S.taskBtns}><button style={S.taskEditBtn} onClick={()=>{const n=prompt("Rename home:",h.name);if(n&&n.trim())renameHome(h.id,n.trim());}}>Rename</button>{homes.length>1&&<button style={S.taskDeleteBtn} onClick={()=>{if(confirm(`Delete "${h.name}" and all its systems?`))deleteHome(h.id);}}>×</button>}</div></div></div>)}</div><button style={{...S.submitBtn,marginTop:16}} onClick={()=>{if(userTier==="free"&&homes.length>=1){setView("upgrade");}else{setFormHome({name:"",icon:"🏡"});setView("add-home");}}}>+ Add Home</button></div>}
 
         
         {/* ═══ PROVIDERS ═══ */}
@@ -2020,6 +2034,70 @@ export default function App() {
             </div>
           </div>;
         })()}
+
+{/* ═══ UPGRADE / PAYWALL ═══ */}
+        {view==="upgrade"&&<div style={S.content}>
+          <div style={{textAlign:"center",padding:"20px 0 10px"}}>
+            <HouseLogo size={64} dark={darkMode}/>
+            <h2 style={{...S.formTitle,marginTop:12,marginBottom:4}}>Unlock Multi-Property</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6,maxWidth:380,margin:"0 auto"}}>You're on the free plan — one home included. Upgrade to Landlord to manage unlimited properties.</p>
+          </div>
+
+          {/* Plan comparison */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"24px 0"}}>
+            {/* Free tier */}
+            <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16}}>
+              <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.textMuted,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Home</div>
+              <div style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>Free</div>
+              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginBottom:16}}>forever</div>
+              <div style={{fontSize:12,fontFamily:sf,color:K.text,lineHeight:2}}>
+                ✓ 1 property<br/>
+                ✓ All features<br/>
+                ✓ Unlimited systems & tasks<br/>
+                ✓ AI maintenance advisor<br/>
+                ✓ Manual upload & scan<br/>
+                ✓ Cloud sync
+              </div>
+              <div style={{marginTop:16,padding:"10px",background:K.accentLight,borderRadius:8,textAlign:"center",fontSize:13,fontWeight:600,fontFamily:sf,color:K.accent}}>Your current plan</div>
+            </div>
+
+            {/* Landlord tier */}
+            <div style={{background:K.surface,border:"2px solid "+K.accent,borderRadius:K.radius,padding:16,position:"relative"}}>
+              <div style={{position:"absolute",top:-10,right:12,background:K.accent,color:"#fff",fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:10,fontFamily:sf,textTransform:"uppercase",letterSpacing:"0.5px"}}>Popular</div>
+              <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Landlord</div>
+              <div style={{display:"flex",alignItems:"baseline",gap:2}}>
+                <span style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>$50</span>
+                <span style={{fontSize:13,color:K.textMuted,fontFamily:sf}}>/month</span>
+              </div>
+              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginBottom:16}}>cancel anytime</div>
+              <div style={{fontSize:12,fontFamily:sf,color:K.text,lineHeight:2}}>
+                ✓ <strong>Unlimited properties</strong><br/>
+                ✓ Everything in Home<br/>
+                ✓ Portfolio dashboard<br/>
+                ✓ Cross-property analytics<br/>
+                ✓ Property comparison<br/>
+                ✓ Priority support
+              </div>
+              <button style={{...S.submitBtn,marginTop:16,padding:"12px"}} onClick={()=>{window.open(STRIPE_LANDLORD_LINK,"_blank");}}>Upgrade Now</button>
+            </div>
+          </div>
+
+          {/* FAQ */}
+          <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:16}}>
+            <h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:12}}>Common Questions</h3>
+            {[
+              {q:"Can I cancel anytime?",a:"Yes. Cancel from your Stripe billing portal and you keep access through the end of your billing period."},
+              {q:"What happens to my data if I cancel?",a:"Nothing — your data stays. You just can't add new properties until you re-subscribe. Your first home is always free."},
+              {q:"Is there a yearly discount?",a:"Not yet — but it's coming. Monthly gives you flexibility to try it out."},
+              {q:"Do I need a credit card for the free plan?",a:"No. The free plan is free forever, no card required."},
+            ].map((faq,i)=><div key={i} style={{marginBottom:i<3?12:0}}>
+              <div style={{fontSize:13,fontWeight:600,fontFamily:sf,color:K.text}}>{faq.q}</div>
+              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,lineHeight:1.5,marginTop:2}}>{faq.a}</div>
+            </div>)}
+          </div>
+
+          <button style={{...S.templateLinkBtn,width:"100%",textAlign:"center"}} onClick={()=>setView("dashboard")}>Maybe later — back to dashboard</button>
+        </div>}
 
 {/* ═══ PREDICTIVE COST TIMELINE ═══ */}
         {view==="cost-forecast"&&(()=>{
