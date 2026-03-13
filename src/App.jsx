@@ -454,6 +454,7 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [manualUpload, setManualUpload] = useState(null);
   const [sharedUsers, setSharedUsers] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-shared")) || []; } catch(e) { return []; } });
 
   // Dark mode theme override
@@ -1093,6 +1094,78 @@ export default function App() {
   const searchResults = searchQuery.trim().length>=2 ? allTasks.filter(t=>{const q=searchQuery.toLowerCase();return t.name.toLowerCase().includes(q)||t.systemName.toLowerCase().includes(q)||(t.notes||"").toLowerCase().includes(q)||(t.parts||[]).some(p=>p.name.toLowerCase().includes(q));}) : [];
   const exportData = () => { const blob=new Blob([JSON.stringify({homes,exportedAt:new Date().toISOString()},null,2)],{type:"application/json"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`homesked-backup-${new Date().toISOString().split("T")[0]}.json`; a.click(); URL.revokeObjectURL(url); showToast("Data exported ✓"); };
   const importData = () => { const input=document.createElement("input"); input.type="file"; input.accept=".json"; input.onchange=(e)=>{const file=e.target.files[0]; if(!file)return; const reader=new FileReader(); reader.onload=(ev)=>{try{const data=JSON.parse(ev.target.result); if(data.homes){setHomes(data.homes);setActiveHomeId(data.homes[0]?.id);showToast("Data imported ✓");}else{showToast("Invalid file format");}}catch(err){showToast("Import failed");}}; reader.readAsText(file);}; input.click(); };
+  // ── Manual Upload → Auto-Generate System ──
+  const handleManualExtract = async (fileData, fileName, mimeType, fromDocId) => {
+    setManualUpload({ stage: "parsing", fileName });
+    setView("manual-preview");
+    try {
+      const b64 = fileData.split(",")[1];
+      const contentBlock = mimeType.includes("pdf")
+        ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
+        : { type: "image", source: { type: "base64", media_type: mimeType, data: b64 } };
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          system: "You extract maintenance schedules from appliance and equipment manuals. Return ONLY valid JSON — no markdown, no backticks, no preamble. Structure: {\"name\":\"System Name\",\"icon\":\"emoji\",\"category\":\"HVAC|Plumbing|Appliances|Exterior|Vehicle|Marine|Air Quality|Septic / Wastewater|Other\",\"notes\":\"brief description\",\"tasks\":[{\"name\":\"task\",\"intervalMonths\":number,\"notes\":\"details\",\"taskType\":\"scheduled\",\"parts\":[{\"name\":\"part\",\"cost\":number,\"status\":\"order\"}]}]}. Use intervalMonths: 0.25=weekly,1=monthly,3=quarterly,6=semi-annual,12=annual,24=biennial,36=every 3 years. Estimate costs in USD. Default to 12 if interval unclear. Extract EVERY maintenance item: filter changes, cleaning, inspections, lubrication, replacements, professional service calls.",
+          messages: [{ role: "user", content: [contentBlock, { type: "text", text: "Extract all recommended maintenance tasks, intervals, parts, and specifications from this manual. Return only the JSON object." }] }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || "API error");
+      const raw = data.content?.map(c => c.text || "").join("") || "";
+      const cleaned = raw.replace(/```json\s?/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (!parsed.name || !parsed.tasks || !Array.isArray(parsed.tasks)) throw new Error("Invalid response structure");
+      const preview = {
+        name: parsed.name || fileName.replace(/\.[^.]+$/, ""),
+        icon: parsed.icon || "📋",
+        category: parsed.category || "Other",
+        notes: parsed.notes || "",
+        fromDocId: fromDocId || null,
+        tasks: parsed.tasks.map(t => ({
+          name: t.name || "Untitled Task",
+          intervalMonths: Number(t.intervalMonths) || 12,
+          notes: t.notes || "",
+          taskType: t.taskType || "scheduled",
+          season: "",
+          parts: (t.parts || []).map(p => ({ name: p.name || "", cost: Number(p.cost) || 0, status: p.status || "order", brand: "", model: "", size: "", purchaseUrl: "" }))
+        }))
+      };
+      setManualUpload({ stage: "preview", fileName, preview });
+    } catch (err) {
+      console.error("Manual extract error:", err);
+      setManualUpload({ stage: "error", fileName, error: err.message || "Failed to extract tasks. Try a clearer image or PDF." });
+    }
+  };
+  const handleManualFileSelect = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".pdf,.jpg,.jpeg,.png,.webp";
+    input.onchange = async (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      setManualUpload({ stage: "uploading", fileName: file.name });
+      setView("manual-preview");
+      const reader = new FileReader();
+      reader.onload = (e) => handleManualExtract(e.target.result, file.name, file.type, null);
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  };
+  const confirmManualSystem = (preview) => {
+    const sys = { id: genId(), name: preview.name, icon: preview.icon, category: preview.category, notes: preview.notes,
+      tasks: preview.tasks.map(t => ({ ...t, id: genId(), lastCompleted: null, workLog: [], photos: [], dependsOn: "", parts: (t.parts || []).map(p => ({ ...p, id: genId() })) })) };
+    setSystems(prev => [...prev, sys]);
+    if (preview.fromDocId) setDocuments(prev => prev.map(d => d.id === preview.fromDocId ? { ...d, systemId: sys.id, category: "manual" } : d));
+    setManualUpload(null);
+    setView("system");
+    setSelectedSystem(sys.id);
+    showToast("Created " + sys.name + " with " + sys.tasks.length + " tasks from manual ✓");
+    createConfetti();
+  };
   const addToCalendar = (task) => { const next=getNextDue(task); if(!next)return; const d=next.toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const end=new Date(next.getTime()+3600000).toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const url=`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent("HomeSked: "+task.name)}&dates=${d}/${end}&details=${encodeURIComponent(task.notes||"")}`; window.open(url,"_blank"); };
 
   if (!loaded) return <div style={S.loadingWrap}><div style={S.loadingText}>Loading HomeSked…</div></div>;
@@ -1239,7 +1312,7 @@ export default function App() {
             )}
             {view==="system"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setSelectedSystem(null);}}>← Back</button>}
             {view==="list"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setListView(null);setPartsFilter(null);}}>← Back</button>}
-            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report")&&<button style={S.backBtn} onClick={()=>setView("dashboard")}>← Back</button>}
+            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else setView("dashboard");}}>← Back</button>}
             {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system"||view==="add-provider"||view==="edit-provider")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":view==="add-provider"||view==="edit-provider"?"providers":"system");setEditingTask(null);setEditingProvider(null);}}>← Cancel</button>}
             <button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>
           </div>
@@ -1450,6 +1523,13 @@ export default function App() {
         {/* ═══ TEMPLATES ═══ */}
         {view==="templates"&&<div style={S.content}><h2 style={S.formTitle}>System Templates</h2>
           {customTemplates.length>0&&<><h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.accent,marginBottom:8}}>Your Templates</h3><div style={{...S.taskList,marginBottom:20}}>{customTemplates.map((tpl,i)=>{const added=systems.some(s=>s.name===tpl.name);return <div key={tpl.id||i} style={{display:"flex",gap:6,alignItems:"center"}}><button style={added?{...S.tplBtnAdded}:{...S.tplBtn,flex:1}} onClick={()=>!added&&addSystemFromTemplate(tpl)} disabled={added}><span style={{fontSize:22}}>{tpl.icon}</span><span style={S.tplName}>{tpl.name}</span><span style={S.tplMeta}>{tpl.tasks.length} tasks</span>{added&&<span style={S.tplCheck}>✓</span>}</button><button style={{background:"transparent",border:"none",color:K.danger,fontSize:18,cursor:"pointer",padding:"4px"}} onClick={()=>{if(confirm("Delete template?"))setCustomTemplates(prev=>prev.filter(t=>t.id!==tpl.id));}}>×</button></div>;})}</div></>}
+          <div style={{background:K.accentLight,border:"1.5px solid "+K.accent,borderRadius:K.radius,padding:"18px 16px",marginBottom:20,textAlign:"center"}}>
+            <span style={{fontSize:36,display:"block",marginBottom:8}}>📄</span>
+            <h3 style={{fontSize:16,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.accent,margin:"0 0 6px"}}>Upload a Manual</h3>
+            <p style={{fontSize:13,color:K.textMuted,fontFamily:sf,marginBottom:14,lineHeight:1.5}}>Upload an appliance or equipment manual (PDF or photo) and AI will automatically extract every maintenance task, interval, and part for you.</p>
+            <button style={{...S.addTaskBtn,padding:"12px 28px",fontSize:15}} onClick={handleManualFileSelect}>📄 Upload Manual</button>
+            <p style={{fontSize:11,color:K.textMuted,fontFamily:sf,marginTop:8}}>Supports PDF, JPG, PNG • 30 seconds instead of 30 minutes</p>
+          </div>
           <h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:8}}>Built-in Templates</h3><p style={{...S.sectionHint,marginBottom:12}}>Tap to add pre-built systems with common tasks.</p><div style={S.taskList}>{SYSTEM_TEMPLATES.map((tpl,i)=>{const added=systems.some(s=>s.name===tpl.name);return <button key={i} style={added?S.tplBtnAdded:{...S.tplBtn,width:"100%"}} onClick={()=>!added&&addSystemFromTemplate(tpl)} disabled={added}><span style={{fontSize:22}}>{tpl.icon}</span><span style={S.tplName}>{tpl.name}</span><span style={S.tplMeta}>{tpl.tasks.length} tasks</span>{added&&<span style={S.tplCheck}>✓</span>}</button>;})}</div></div>}
 
         {/* ═══ ADD HOME ═══ */}
@@ -1901,6 +1981,7 @@ export default function App() {
                     {doc.notes&&<p style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginTop:4}}>{doc.notes}</p>}
                   </div>
                   <div style={{display:"flex",gap:4,flexShrink:0}}>
+                    {(doc.type?.includes("pdf")||doc.type?.includes("image"))&&<button style={{...S.taskEditBtn,color:K.accent,borderColor:K.accent+"66"}} onClick={()=>handleManualExtract(doc.data,doc.name,doc.type,doc.id)} title="Extract maintenance tasks with AI">🤖</button>}
                     <button style={S.taskEditBtn} onClick={()=>{const a=document.createElement("a");a.href=doc.data;a.download=doc.name;a.click();}}>⬇</button>
                     <button style={S.taskEditBtn} onClick={()=>{
                       const cat=prompt("Category (warranty, manual, receipt, inspection, general):",doc.category||"general");
@@ -1924,6 +2005,95 @@ export default function App() {
               return <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid "+K.border}}><span style={{fontSize:13,fontFamily:sf,color:K.text}}>{d.name}</span><span style={{fontSize:12,fontWeight:600,fontFamily:sf,color}}>{days<0?"Expired "+Math.abs(days)+"d ago":days+"d remaining"}</span></div>;
             })}
           </div>}
+        </div>}
+
+        {/* ═══ MANUAL UPLOAD PREVIEW ═══ */}
+        {view==="manual-preview"&&manualUpload&&<div style={S.content}>
+          {manualUpload.stage==="uploading"&&<div style={{textAlign:"center",padding:"60px 20px"}}>
+            <div style={{fontSize:48,marginBottom:16,animation:"celebration-pop 0.5s ease-out"}}>📄</div>
+            <h2 style={{...S.formTitle,marginBottom:8}}>Reading Manual...</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf}}>Uploading {manualUpload.fileName}</p>
+          </div>}
+
+          {manualUpload.stage==="parsing"&&<div style={{textAlign:"center",padding:"60px 20px"}}>
+            <div style={{fontSize:48,marginBottom:16}}>🤖</div>
+            <h2 style={{...S.formTitle,marginBottom:8}}>Extracting Tasks...</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6}}>AI is reading <strong>{manualUpload.fileName}</strong> and extracting every maintenance task, interval, and part.</p>
+            <p style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginTop:12}}>This usually takes 10–20 seconds.</p>
+            <div style={{marginTop:20,height:4,background:K.border,borderRadius:2,maxWidth:200,margin:"20px auto 0",overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:K.accent,borderRadius:2,animation:"manual-progress 2s ease-in-out infinite"}}/></div>
+          </div>}
+
+          {manualUpload.stage==="error"&&<div style={{textAlign:"center",padding:"60px 20px"}}>
+            <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
+            <h2 style={{...S.formTitle,marginBottom:8,color:K.danger}}>Extraction Failed</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6,maxWidth:360,margin:"0 auto 20px"}}>{manualUpload.error}</p>
+            <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+              <button style={S.submitBtn} onClick={handleManualFileSelect}>Try Another File</button>
+              <button style={S.modalBtnAlt} onClick={()=>{setManualUpload(null);setView("templates");}}>Back to Templates</button>
+            </div>
+          </div>}
+
+          {manualUpload.stage==="preview"&&manualUpload.preview&&(()=>{
+            const p=manualUpload.preview;
+            const totalParts=p.tasks.reduce((s,t)=>(t.parts||[]).length+s,0);
+            const totalCost=p.tasks.reduce((s,t)=>(t.parts||[]).reduce((s2,pt)=>s2+(pt.cost||0),s),0);
+            return <div>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+                <span style={{fontSize:40}}>{p.icon}</span>
+                <div>
+                  <h2 style={{...S.formTitle,margin:0,fontSize:22}}>{p.name}</h2>
+                  <span style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>{p.category} · Extracted from {manualUpload.fileName}</span>
+                </div>
+              </div>
+
+              {p.notes&&<p style={{...S.sysNotes,marginBottom:16}}>{p.notes}</p>}
+
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:20}}>
+                <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:8,padding:12,textAlign:"center"}}>
+                  <div style={{fontSize:24,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.accent}}>{p.tasks.length}</div>
+                  <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>Tasks Found</div>
+                </div>
+                <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:8,padding:12,textAlign:"center"}}>
+                  <div style={{fontSize:24,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.warning}}>{totalParts}</div>
+                  <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>Parts</div>
+                </div>
+                <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:8,padding:12,textAlign:"center"}}>
+                  <div style={{fontSize:24,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.warm}}>${totalCost.toFixed(0)}</div>
+                  <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>Est. Cost</div>
+                </div>
+              </div>
+
+              <h3 style={{fontSize:15,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:10}}>Extracted Tasks</h3>
+              <div style={S.taskList}>
+                {p.tasks.map((t,i)=>{
+                  const partsCost=(t.parts||[]).reduce((s,pt)=>s+(pt.cost||0),0);
+                  return <div key={i} style={S.taskCard}>
+                    <div style={S.taskTop}>
+                      <div style={{...S.taskDot,backgroundColor:K.accent}}/>
+                      <div style={S.taskInfo}>
+                        <div style={S.taskName}>{t.name}</div>
+                        <div style={S.taskFreq}>{formatInterval(t.intervalMonths)}{partsCost>0?" · $"+partsCost.toFixed(0)+" in parts":""}</div>
+                      </div>
+                      <button style={{background:"transparent",border:"none",color:K.danger,fontSize:18,cursor:"pointer",padding:"2px"}} onClick={()=>{
+                        const updated={...manualUpload,preview:{...p,tasks:p.tasks.filter((_,j)=>j!==i)}};
+                        setManualUpload(updated);
+                      }}>×</button>
+                    </div>
+                    {t.notes&&<p style={S.taskNotes}>{t.notes}</p>}
+                    {(t.parts||[]).length>0&&<div style={{margin:"6px 0 0 20px",fontSize:12,fontFamily:sf,color:K.textMuted}}>
+                      {t.parts.map((pt,j)=><div key={j} style={{padding:"2px 0"}}>🔧 {pt.name}{pt.cost>0?" — $"+pt.cost.toFixed(0):""}</div>)}
+                    </div>}
+                  </div>;
+                })}
+              </div>
+
+              <div style={{display:"flex",gap:10,marginTop:20}}>
+                <button style={{...S.submitBtn,flex:2}} onClick={()=>confirmManualSystem(p)}>✓ Add System with {p.tasks.length} Tasks</button>
+                <button style={{...S.modalBtnAlt,flex:1,marginTop:8}} onClick={()=>{setManualUpload(null);setView("templates");}}>Cancel</button>
+              </div>
+              <p style={{fontSize:11,color:K.textMuted,fontFamily:sf,textAlign:"center",marginTop:10}}>You can edit any task after adding. Remove tasks you don't need with the × button above.</p>
+            </div>;
+          })()}
         </div>}
 
 {/* ═══ LIST VIEW ═══ */}
@@ -2141,7 +2311,7 @@ export default function App() {
 if (typeof document !== "undefined" && !document.getElementById("hs-anims")) {
   const s = document.createElement("style");
   s.id = "hs-anims";
-  s.textContent = "@keyframes celebration-pop{0%{opacity:0;transform:scale(0.5)}50%{transform:scale(1.1)}100%{opacity:1;transform:scale(1)}}@keyframes celebration-fade{0%{opacity:1}100%{opacity:0}}@keyframes hs-smoke{0%{opacity:0.5;transform:translateY(0) scale(1)}50%{opacity:0.3;transform:translateY(-8px) scale(1.4)}100%{opacity:0;transform:translateY(-18px) scale(0.6)}}";
+  s.textContent = "@keyframes celebration-pop{0%{opacity:0;transform:scale(0.5)}50%{transform:scale(1.1)}100%{opacity:1;transform:scale(1)}}@keyframes celebration-fade{0%{opacity:1}100%{opacity:0}}@keyframes hs-smoke{0%{opacity:0.5;transform:translateY(0) scale(1)}50%{opacity:0.3;transform:translateY(-8px) scale(1.4)}100%{opacity:0;transform:translateY(-18px) scale(0.6)}}@keyframes manual-progress{0%{width:10%;margin-left:0}50%{width:60%;margin-left:20%}100%{width:10%;margin-left:90%}}";
   document.head.appendChild(s);
 }
 
