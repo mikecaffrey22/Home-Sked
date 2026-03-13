@@ -455,6 +455,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [manualUpload, setManualUpload] = useState(null);
+  const [receiptScan, setReceiptScan] = useState(null);
   const [sharedUsers, setSharedUsers] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-shared")) || []; } catch(e) { return []; } });
 
   // Dark mode theme override
@@ -1166,6 +1167,76 @@ export default function App() {
     showToast("Created " + sys.name + " with " + sys.tasks.length + " tasks from manual ✓");
     createConfetti();
   };
+  // ── Smart Receipt Scan ──
+  const handleReceiptScan = async (fileData, fileName, mimeType) => {
+    setReceiptScan({ stage: "parsing", fileName });
+    setView("receipt-scan");
+    try {
+      const b64 = fileData.split(",")[1];
+      const contentBlock = mimeType.includes("pdf")
+        ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
+        : { type: "image", source: { type: "base64", media_type: mimeType, data: b64 } };
+      const sysContext = systems.map(s => s.name + " (" + s.tasks.map(t => t.name).join(", ") + ")").join("; ");
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 2000,
+          system: "You extract data from maintenance receipts, invoices, and service records. Return ONLY valid JSON — no markdown, no backticks. Structure: {\"vendor\":\"company name\",\"date\":\"YYYY-MM-DD\",\"total\":number,\"items\":[{\"description\":\"what was done\",\"cost\":number}],\"suggestedSystem\":\"best matching system name or empty\",\"suggestedTask\":\"best matching task name or empty\",\"notes\":\"any useful details like warranty info, part numbers, tech name\"}. The user has these systems and tasks: " + sysContext + ". Match to the most relevant system/task if possible. If the receipt is unclear, extract what you can and leave unknowns empty.",
+          messages: [{ role: "user", content: [contentBlock, { type: "text", text: "Extract all details from this receipt/invoice. Match to my existing systems and tasks if possible." }] }]
+        })
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || "API error");
+      const raw = data.content?.map(c => c.text || "").join("") || "";
+      const cleaned = raw.replace(/```json\s?/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      const matchedSystem = systems.find(s => s.name.toLowerCase().includes((parsed.suggestedSystem || "").toLowerCase()) || (parsed.suggestedSystem || "").toLowerCase().includes(s.name.toLowerCase()));
+      const matchedTask = matchedSystem ? matchedSystem.tasks.find(t => t.name.toLowerCase().includes((parsed.suggestedTask || "").toLowerCase()) || (parsed.suggestedTask || "").toLowerCase().includes(t.name.toLowerCase())) : null;
+      setReceiptScan({ stage: "preview", fileName, data: parsed, matchedSystem, matchedTask, selectedSystemId: matchedSystem?.id || "", selectedTaskId: matchedTask?.id || "" });
+    } catch (err) {
+      console.error("Receipt scan error:", err);
+      setReceiptScan({ stage: "error", fileName, error: err.message || "Could not read this receipt. Try a clearer photo." });
+    }
+  };
+  const handleReceiptFileSelect = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".pdf,.jpg,.jpeg,.png,.webp";
+    input.onchange = async (ev) => {
+      const file = ev.target.files[0];
+      if (!file) return;
+      setReceiptScan({ stage: "uploading", fileName: file.name });
+      setView("receipt-scan");
+      const reader = new FileReader();
+      reader.onload = (e) => handleReceiptScan(e.target.result, file.name, file.type);
+      reader.readAsDataURL(file);
+    };
+    input.click();
+  };
+  const confirmReceiptLog = (r) => {
+    const sysId = r.selectedSystemId;
+    const taskId = r.selectedTaskId;
+    const cost = r.data.total || 0;
+    const date = r.data.date ? new Date(r.data.date + "T12:00:00").toISOString() : new Date().toISOString();
+    const noteText = [r.data.vendor, r.data.notes, r.data.items?.map(i => i.description).join(", ")].filter(Boolean).join(" — ") || "Receipt logged";
+    if (sysId && taskId) {
+      setSystems(prev => prev.map(s => s.id === sysId ? { ...s, tasks: s.tasks.map(t => t.id === taskId ? { ...t, lastCompleted: date, workLog: [...(t.workLog || []), { id: genId(), date, notes: noteText }] } : t) } : s));
+      if (cost > 0) {
+        setBudget(prev => ({ ...prev, spent: prev.spent + cost, entries: [...prev.entries, { date, amount: cost, task: taskId, system: sysId }] }));
+        const key = sysId + "-" + taskId;
+        setPriceHistory(prev => ({ ...prev, [key]: [...(prev[key] || []), { date, cost }] }));
+      }
+      createConfetti();
+      showToast("Logged $" + cost.toFixed(0) + " to task ✓");
+    } else if (cost > 0) {
+      setBudget(prev => ({ ...prev, spent: prev.spent + cost, entries: [...prev.entries, { date, amount: cost, task: "receipt", system: "receipt" }] }));
+      showToast("$" + cost.toFixed(0) + " logged to budget ✓");
+    }
+    setReceiptScan(null);
+    setView("dashboard");
+  };
   const addToCalendar = (task) => { const next=getNextDue(task); if(!next)return; const d=next.toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const end=new Date(next.getTime()+3600000).toISOString().replace(/[-:]/g,"").split(".")[0]+"Z"; const url=`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent("HomeSked: "+task.name)}&dates=${d}/${end}&details=${encodeURIComponent(task.notes||"")}`; window.open(url,"_blank"); };
 
   if (!loaded) return <div style={S.loadingWrap}><div style={S.loadingText}>Loading HomeSked…</div></div>;
@@ -1317,7 +1388,7 @@ export default function App() {
             )}
             {view==="system"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setSelectedSystem(null);}}>← Back</button>}
             {view==="list"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setListView(null);setPartsFilter(null);}}>← Back</button>}
-            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else setView("dashboard");}}>← Back</button>}
+            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview"||view==="health-score"||view==="cost-forecast"||view==="receipt-scan")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else if(view==="receipt-scan"){setReceiptScan(null);setView("dashboard");}else setView("dashboard");}}>← Back</button>}
             {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system"||view==="add-provider"||view==="edit-provider")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":view==="add-provider"||view==="edit-provider"?"providers":"system");setEditingTask(null);setEditingProvider(null);}}>← Cancel</button>}
             <button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>
           </div>
@@ -1351,6 +1422,9 @@ export default function App() {
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setListView("analytics");setView("list");}}>📊 Analytics</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("calendar");}}>📅 Calendar</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("report");}}>📋 Report</button>
+          <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("health-score");}}>💚 Health Score</button>
+          <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("cost-forecast");}}>📈 5-Year Forecast</button>
+          <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);handleReceiptFileSelect();}}>🧾 Scan Receipt</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);showToast("Synced ✓");}}>☁️ Sync Now</button>
           <button style={{...S.homeDropItem,color:K.danger}} onClick={handleLogout}>Sign Out</button>
         </div>
@@ -1483,14 +1557,17 @@ export default function App() {
             })()}
 
             {/* Gamification bar */}
-            {achievements.score > 0 && !searchQuery.trim() && <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,padding:"8px 12px",background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius}}>
-              <div style={{display:"flex",alignItems:"center",gap:4,cursor:"pointer"}} onClick={()=>setShowTrophies(true)}>
-                <span style={{fontSize:18}}>🏆</span>
-                <span style={{fontSize:20,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.accent}}>{achievements.score}</span>
+            {achievements.score > 0 && !searchQuery.trim() && <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,padding:"8px 12px",background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,cursor:"pointer"}} onClick={()=>setView("health-score")}>
+              <div style={{display:"flex",alignItems:"center",gap:4}}>
+                <span style={{fontSize:18}}>🏠</span>
+                <span style={{fontSize:20,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:achievements.score>=80?"#2E7D32":achievements.score>=50?K.warning:K.danger}}>{achievements.score}</span>
               </div>
-              <div style={{flex:1,height:4,background:K.border,borderRadius:2,overflow:"hidden"}}><div style={{width:achievements.score+"%",height:"100%",background:achievements.score>=80?"#2E7D32":achievements.score>=50?K.warning:K.danger,borderRadius:2}}/></div>
+              <div style={{flex:1}}>
+                <div style={{height:4,background:K.border,borderRadius:2,overflow:"hidden"}}><div style={{width:achievements.score+"%",height:"100%",background:achievements.score>=80?"#2E7D32":achievements.score>=50?K.warning:K.danger,borderRadius:2}}/></div>
+                <div style={{fontSize:10,color:K.textMuted,fontFamily:sf,marginTop:2}}>Home Health Score — tap for details</div>
+              </div>
               {achievements.streak > 1 && <div style={{display:"flex",alignItems:"center",gap:3}}><span style={{fontSize:14}}>🔥</span><span style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.warning}}>{achievements.streak}</span></div>}
-              <button style={{fontSize:10,color:K.textMuted,background:"transparent",border:"none",cursor:"pointer",fontFamily:sf}} onClick={()=>setShowTrophies(true)}>🏅 {achievements.unlocked.length}</button>
+              <button style={{fontSize:10,color:K.textMuted,background:"transparent",border:"none",cursor:"pointer",fontFamily:sf}} onClick={(e)=>{e.stopPropagation();setShowTrophies(true);}}>🏅 {achievements.unlocked.length}</button>
             </div>}
 
             <div style={S.statsRow}>
@@ -1520,6 +1597,9 @@ export default function App() {
                 <button style={S.templateLinkBtn} onClick={()=>{setListView("analytics");setView("list");}}>📊 Analytics</button>
                 <button style={S.templateLinkBtn} onClick={()=>setView("calendar")}>📅 Calendar</button>
                 <button style={S.templateLinkBtn} onClick={()=>setView("report")}>📋 Report</button>
+                <button style={S.templateLinkBtn} onClick={()=>setView("health-score")}>💚 Health Score</button>
+                <button style={S.templateLinkBtn} onClick={()=>setView("cost-forecast")}>📈 5-Year Forecast</button>
+                <button style={S.templateLinkBtn} onClick={handleReceiptFileSelect}>🧾 Scan Receipt</button>
                 <button style={S.templateLinkBtn} onClick={()=>setView("documents")}>📄 Documents{documents.length>0?" ("+documents.length+")":""}</button><button style={S.templateLinkBtn} onClick={()=>{setFormHome({name:"",icon:"🏡"});setView("add-home");}}>+ Add another home</button><button style={S.templateLinkBtn} onClick={exportData}>📥 Export</button><button style={S.templateLinkBtn} onClick={importData}>📤 Import</button></div>}
             </>}
           </div>
@@ -1803,6 +1883,364 @@ export default function App() {
               setTimeout(()=>w.print(),500);
             }}>🖨️ Print / Save as PDF</button>
           </div>
+        </div>}
+
+{/* ═══ HOME HEALTH SCORE ═══ */}
+        {view==="health-score"&&(()=>{
+          // ── Scoring engine (6 factors, 100 points total) ──
+          const totalT = allTasks.length;
+          const trackedT = allTasks.filter(t=>t.lastCompleted).length;
+          const overdueT = allTasks.filter(t=>{const d=daysUntil(getNextDue(t));return d!==null&&d<0;}).length;
+          const scheduledT = allTasks.filter(t=>!isAsReq(t)).length;
+          const onTimeT = scheduledT > 0 ? scheduledT - overdueT : 0;
+          const totalParts = allTasks.reduce((s,t)=>(t.parts||[]).length+s,0);
+          const onHandParts = allTasks.reduce((s,t)=>(t.parts||[]).filter(p=>p.status==="on-hand").length+s,0);
+
+          // Factor 1: Tracking Coverage (25 pts) — are your tasks tracked?
+          const f1 = totalT > 0 ? Math.round((trackedT / totalT) * 25) : 0;
+          // Factor 2: On-Time Rate (30 pts) — overdue ratio
+          const f2 = scheduledT > 0 ? Math.round((onTimeT / scheduledT) * 30) : 30;
+          // Factor 3: System Coverage (15 pts)
+          const f3 = Math.min(15, systems.length * 3);
+          // Factor 4: Parts Readiness (10 pts)
+          const f4 = totalParts > 0 ? Math.round((onHandParts / totalParts) * 10) : 5;
+          // Factor 5: Documentation (10 pts)
+          const hasProfile = !!(homeProfile.yearBuilt || homeProfile.sqft);
+          const hasDocs = documents.length > 0;
+          const f5 = (hasProfile ? 5 : 0) + (hasDocs ? 5 : 0);
+          // Factor 6: Proactive Planning (10 pts)
+          const hasBudget = budget.monthly > 0;
+          const hasProviders = providers.length > 0;
+          const hasNotifs = typeof Notification !== "undefined" && Notification.permission === "granted";
+          const f6 = (hasBudget ? 4 : 0) + (hasProviders ? 3 : 0) + (hasNotifs ? 3 : 0);
+
+          const totalScore = Math.min(100, f1 + f2 + f3 + f4 + f5 + f6);
+          const grade = totalScore >= 90 ? "A" : totalScore >= 80 ? "B+" : totalScore >= 70 ? "B" : totalScore >= 60 ? "C+" : totalScore >= 50 ? "C" : totalScore >= 40 ? "D" : "F";
+          const gradeColor = totalScore >= 80 ? "#2E7D32" : totalScore >= 60 ? K.warning : K.danger;
+          const gradeLabel = totalScore >= 90 ? "Excellent" : totalScore >= 80 ? "Great shape" : totalScore >= 70 ? "Good, room to improve" : totalScore >= 60 ? "Needs attention" : totalScore >= 50 ? "Falling behind" : totalScore >= 40 ? "At risk" : "Critical";
+
+          // Quick wins
+          const quickWins = [];
+          if (overdueT > 0) quickWins.push({ icon: "⚠️", text: "Complete " + overdueT + " overdue task" + (overdueT > 1 ? "s" : ""), impact: Math.min(15, overdueT * 5), action: () => { setListView("overdue"); setView("list"); } });
+          if (trackedT < totalT) { const untracked = totalT - trackedT; quickWins.push({ icon: "📋", text: "Set dates for " + untracked + " untracked task" + (untracked > 1 ? "s" : ""), impact: Math.min(10, untracked * 2) }); }
+          if (!hasProfile) quickWins.push({ icon: "🏠", text: "Fill in property details", impact: 5, action: () => setView("home-profile") });
+          if (!hasBudget) quickWins.push({ icon: "💰", text: "Set a maintenance budget", impact: 4, action: () => setView("budget-setup") });
+          if (!hasProviders) quickWins.push({ icon: "📞", text: "Add a service provider", impact: 3, action: () => setView("providers") });
+          if (!hasDocs) quickWins.push({ icon: "📄", text: "Upload a document or manual", impact: 5, action: () => setView("documents") });
+          if (!hasNotifs && typeof Notification !== "undefined") quickWins.push({ icon: "🔔", text: "Enable push notifications", impact: 3, action: async () => { const r = await requestNotifPermission(); setNotifEnabled(r === "granted"); if (r === "granted") showToast("Notifications enabled ✓"); } });
+          if (systems.length < 3) quickWins.push({ icon: "🔧", text: "Track more systems (have " + systems.length + ", need 5 for full points)", impact: (5 - systems.length) * 3, action: () => setView("templates") });
+          quickWins.sort((a, b) => b.impact - a.impact);
+
+          const factors = [
+            { name: "Task Tracking", score: f1, max: 25, icon: "📋", desc: trackedT + " of " + totalT + " tasks have completion dates" },
+            { name: "On-Time Rate", score: f2, max: 30, icon: "⏰", desc: overdueT === 0 ? "No overdue tasks — perfect!" : overdueT + " task" + (overdueT > 1 ? "s" : "") + " overdue" },
+            { name: "System Coverage", score: f3, max: 15, icon: "🔧", desc: systems.length + " system" + (systems.length !== 1 ? "s" : "") + " tracked" },
+            { name: "Parts Ready", score: f4, max: 10, icon: "🧰", desc: onHandParts + " of " + totalParts + " parts on hand" },
+            { name: "Documentation", score: f5, max: 10, icon: "📄", desc: (hasProfile ? "Property details ✓" : "No property details") + " · " + (hasDocs ? documents.length + " docs" : "No documents") },
+            { name: "Proactive Planning", score: f6, max: 10, icon: "🛡️", desc: [hasBudget ? "Budget ✓" : "", hasProviders ? "Providers ✓" : "", hasNotifs ? "Notifications ✓" : ""].filter(Boolean).join(" · ") || "Nothing set up yet" },
+          ];
+
+          // SVG circular gauge
+          const radius = 80;
+          const circumference = 2 * Math.PI * radius;
+          const offset = circumference - (totalScore / 100) * circumference;
+
+          return <div style={S.content}>
+            {/* Main Score Card */}
+            <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:"24px 20px",textAlign:"center",marginBottom:20}}>
+              <div style={{position:"relative",width:200,height:200,margin:"0 auto 16px"}}>
+                <svg width="200" height="200" viewBox="0 0 200 200" style={{transform:"rotate(-90deg)"}}>
+                  <circle cx="100" cy="100" r={radius} fill="none" stroke={K.border} strokeWidth="12"/>
+                  <circle cx="100" cy="100" r={radius} fill="none" stroke={gradeColor} strokeWidth="12" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={offset} style={{transition:"stroke-dashoffset 1s ease-out"}}/>
+                </svg>
+                <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",textAlign:"center"}}>
+                  <div style={{fontSize:48,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:gradeColor,lineHeight:1}}>{totalScore}</div>
+                  <div style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:gradeColor,marginTop:-2}}>{grade}</div>
+                </div>
+              </div>
+              <h2 style={{margin:"0 0 4px",fontSize:22,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>Home Health Score</h2>
+              <p style={{fontSize:14,color:gradeColor,fontFamily:sf,fontWeight:600,margin:"0 0 4px"}}>{gradeLabel}</p>
+              <p style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>{home?.name || "My Home"} · {systems.length} systems · {totalT} tasks</p>
+            </div>
+
+            {/* Factor Breakdown */}
+            <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:20}}>
+              <h3 style={{fontSize:15,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:14}}>Score Breakdown</h3>
+              {factors.map((f, i) => {
+                const pct = f.max > 0 ? Math.round((f.score / f.max) * 100) : 0;
+                const barColor = pct >= 80 ? "#2E7D32" : pct >= 50 ? K.warning : K.danger;
+                return <div key={i} style={{marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:13,fontFamily:sf,color:K.text}}>{f.icon} {f.name}</span>
+                    <span style={{fontSize:13,fontWeight:700,fontFamily:sf,color:barColor}}>{f.score}/{f.max}</span>
+                  </div>
+                  <div style={{height:6,background:K.border,borderRadius:3,overflow:"hidden",marginBottom:3}}><div style={{width:pct+"%",height:"100%",background:barColor,borderRadius:3,transition:"width 0.5s ease-out"}}/></div>
+                  <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>{f.desc}</div>
+                </div>;
+              })}
+            </div>
+
+            {/* Quick Wins */}
+            {quickWins.length > 0 && <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:20}}>
+              <h3 style={{fontSize:15,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:4}}>🚀 Quick Wins</h3>
+              <p style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginBottom:12}}>Actions that will boost your score the most</p>
+              {quickWins.slice(0, 5).map((w, i) => (
+                <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i < Math.min(quickWins.length, 5) - 1 ? "1px solid " + K.border : ""}}>
+                  <span style={{fontSize:18,flexShrink:0}}>{w.icon}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontFamily:sf,color:K.text,fontWeight:500}}>{w.text}</div>
+                    <div style={{fontSize:11,color:"#2E7D32",fontFamily:sf}}>+{w.impact} pts</div>
+                  </div>
+                  {w.action && <button style={{background:K.accent,color:"#fff",border:"none",borderRadius:6,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:sf,whiteSpace:"nowrap"}} onClick={w.action}>Fix</button>}
+                </div>
+              ))}
+            </div>}
+
+            {/* Shareable Summary */}
+            <div id="health-score-card" style={{background:darkMode?"linear-gradient(135deg, #1E3F2B 0%, #0F2318 100%)":"linear-gradient(135deg, #2D5A3D 0%, #1E3F2B 100%)",borderRadius:K.radius,padding:"20px 24px",textAlign:"center",color:"#fff",marginBottom:16}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginBottom:8}}>
+                <HouseLogo size={28} dark={true}/>
+                <span style={{fontSize:14,fontWeight:600,fontFamily:sf,opacity:0.8}}>HomeSked</span>
+              </div>
+              <div style={{fontSize:56,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",lineHeight:1}}>{totalScore}</div>
+              <div style={{fontSize:24,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",marginBottom:4}}>{grade}</div>
+              <div style={{fontSize:14,fontFamily:sf,opacity:0.7,marginBottom:2}}>{gradeLabel}</div>
+              <div style={{fontSize:12,fontFamily:sf,opacity:0.5}}>{systems.length} systems · {totalT} tasks · {overdueT === 0 ? "0 overdue ✓" : overdueT + " overdue"}</div>
+            </div>
+
+            <div style={{display:"flex",gap:8}}>
+              <button style={{...S.templateLinkBtn,flex:1,textAlign:"center"}} onClick={()=>{
+                const el = document.getElementById("health-score-card");
+                const w = window.open("","","width=420,height=360");
+                w.document.write("<html><head><title>My Home Health Score</title><style>body{margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#111;font-family:system-ui}</style></head><body>" + el.outerHTML + "</body></html>");
+                w.document.close();
+                setTimeout(() => w.print(), 500);
+              }}>📤 Share / Print</button>
+              <button style={{...S.templateLinkBtn,flex:1,textAlign:"center"}} onClick={()=>setShowTrophies(true)}>🏅 Trophies ({achievements.unlocked.length})</button>
+            </div>
+          </div>;
+        })()}
+
+{/* ═══ PREDICTIVE COST TIMELINE ═══ */}
+        {view==="cost-forecast"&&(()=>{
+          const homeAge = homeProfile.yearBuilt ? new Date().getFullYear() - Number(homeProfile.yearBuilt) : null;
+          const years = [0,1,2,3,4];
+          const yearLabels = years.map(y => new Date().getFullYear() + y);
+
+          // Calculate recurring costs per year from scheduled tasks
+          const recurringPerYear = systems.reduce((total, s) => total + s.tasks.filter(t => !isAsReq(t) && t.intervalMonths > 0).reduce((st, t) => {
+            const tpy = 12 / t.intervalMonths;
+            const tc = (t.parts || []).filter(p => p.status === "order").reduce((pc, p) => pc + (p.cost || 0), 0);
+            return st + tc * tpy;
+          }, 0), 0);
+
+          // Big-ticket predictions based on system age and property age
+          const bigTickets = [];
+          if (homeAge !== null) {
+            const roofAge = homeProfile.roof ? (homeProfile.roof.match(/\d{4}/) ? new Date().getFullYear() - parseInt(homeProfile.roof.match(/\d{4}/)[0]) : homeAge) : homeAge;
+            if (roofAge >= 18) bigTickets.push({ name: "Roof replacement", est: 12000, year: Math.max(0, Math.min(4, 25 - roofAge)), icon: "🏠", urgency: roofAge >= 22 ? "high" : "medium" });
+            if (homeAge >= 8 && systems.some(s => s.name.toLowerCase().includes("water heater"))) bigTickets.push({ name: "Water heater replacement", est: 1500, year: Math.max(0, Math.min(4, 12 - homeAge % 12)), icon: "🚿", urgency: homeAge % 12 >= 10 ? "high" : "low" });
+            if (homeAge >= 12 && systems.some(s => s.name.toLowerCase().includes("hvac") || s.name.toLowerCase().includes("furnace") || s.name.toLowerCase().includes("air"))) bigTickets.push({ name: "HVAC system replacement", est: 8000, year: Math.max(0, Math.min(4, 18 - homeAge % 18)), icon: "🔥", urgency: homeAge % 18 >= 15 ? "high" : "low" });
+          }
+          systems.forEach(s => {
+            s.tasks.forEach(t => {
+              if (isAsReq(t) || !t.intervalMonths || t.intervalMonths < 24) return;
+              const tc = (t.parts || []).filter(p => p.status === "order").reduce((pc, p) => pc + (p.cost || 0), 0);
+              if (tc >= 200) {
+                const next = getNextDue(t);
+                if (next) {
+                  const yearsOut = Math.max(0, Math.floor((next - new Date()) / (365.25 * 864e5)));
+                  if (yearsOut <= 4) bigTickets.push({ name: t.name, est: tc, year: yearsOut, icon: s.icon, urgency: yearsOut === 0 ? "high" : "low", system: s.name });
+                }
+              }
+            });
+          });
+
+          // Build year-by-year projection
+          const yearData = years.map(y => {
+            const recurring = recurringPerYear;
+            const bigItems = bigTickets.filter(b => b.year === y);
+            const bigTotal = bigItems.reduce((s, b) => s + b.est, 0);
+            return { year: yearLabels[y], recurring, bigItems, bigTotal, total: recurring + bigTotal };
+          });
+          const maxYearCost = Math.max(...yearData.map(y => y.total), 1);
+          const fiveYearTotal = yearData.reduce((s, y) => s + y.total, 0);
+          const monthlySavings = Math.ceil(fiveYearTotal / 60);
+
+          return <div style={S.content}>
+            <h2 style={S.formTitle}>📈 5-Year Cost Forecast</h2>
+            <p style={{fontSize:13,color:K.textMuted,fontFamily:sf,marginBottom:20,lineHeight:1.5}}>Projected maintenance costs for {home?.name || "your home"} based on your tracked systems, task intervals, and property age.</p>
+
+            {/* Summary cards */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:20}}>
+              <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:8,padding:12,textAlign:"center"}}>
+                <div style={{fontSize:22,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.accent}}>${(fiveYearTotal/1000).toFixed(1)}k</div>
+                <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>5-Year Total</div>
+              </div>
+              <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:8,padding:12,textAlign:"center"}}>
+                <div style={{fontSize:22,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.warning}}>${(recurringPerYear/1000).toFixed(1)}k</div>
+                <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>Annual Recurring</div>
+              </div>
+              <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:8,padding:12,textAlign:"center"}}>
+                <div style={{fontSize:22,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:"#2E7D32"}}>${monthlySavings}</div>
+                <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>Save/Month</div>
+              </div>
+            </div>
+
+            {/* Savings plan callout */}
+            <div style={{background:darkMode?"#1E3F2B":"#E6EFE9",border:"1.5px solid "+K.accent+"44",borderRadius:K.radius,padding:"14px 16px",marginBottom:20,display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:28}}>🐖</span>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.accent}}>Put away ${monthlySavings}/month</div>
+                <div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>and you'll be ready for everything — routine maintenance and big-ticket replacements.</div>
+              </div>
+            </div>
+
+            {/* Year-by-year bars */}
+            <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:20}}>
+              <h3 style={{fontSize:15,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:14}}>Year-by-Year Breakdown</h3>
+              {yearData.map((y, i) => {
+                const pct = maxYearCost > 0 ? Math.round((y.total / maxYearCost) * 100) : 0;
+                const recurPct = maxYearCost > 0 ? Math.round((y.recurring / maxYearCost) * 100) : 0;
+                const isThisYear = i === 0;
+                return <div key={i} style={{marginBottom:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:14,fontWeight:isThisYear?700:500,fontFamily:sf,color:K.text}}>{y.year}{isThisYear?" (this year)":""}</span>
+                    <span style={{fontSize:14,fontWeight:700,fontFamily:sf,color:y.bigTotal>0?K.warning:K.text}}>${y.total>=1000?(y.total/1000).toFixed(1)+"k":y.total.toFixed(0)}</span>
+                  </div>
+                  <div style={{height:10,background:K.border,borderRadius:5,overflow:"hidden",display:"flex"}}>
+                    <div style={{width:recurPct+"%",height:"100%",background:K.accent,transition:"width 0.5s"}}/>
+                    {y.bigTotal>0&&<div style={{width:(pct-recurPct)+"%",height:"100%",background:K.warning,transition:"width 0.5s"}}/>}
+                  </div>
+                  <div style={{display:"flex",gap:12,marginTop:4,fontSize:11,color:K.textMuted,fontFamily:sf}}>
+                    <span>Recurring: ${y.recurring.toFixed(0)}</span>
+                    {y.bigTotal>0&&<span style={{color:K.warning}}>Big-ticket: ${y.bigTotal.toFixed(0)}</span>}
+                  </div>
+                  {y.bigItems.length>0&&<div style={{marginTop:6}}>
+                    {y.bigItems.map((b,j)=><div key={j} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",fontSize:12,fontFamily:sf}}>
+                      <span>{b.icon}</span>
+                      <span style={{flex:1,color:K.text}}>{b.name}{b.system?" ("+b.system+")":""}</span>
+                      <span style={{fontWeight:700,color:b.urgency==="high"?K.danger:K.warning}}>${b.est.toLocaleString()}</span>
+                      {b.urgency==="high"&&<span style={{fontSize:10,background:K.danger+"18",color:K.danger,padding:"1px 6px",borderRadius:4,fontWeight:600}}>Soon</span>}
+                    </div>)}
+                  </div>}
+                </div>;
+              })}
+              <div style={{display:"flex",alignItems:"center",gap:12,marginTop:8,fontSize:11,fontFamily:sf,color:K.textMuted}}>
+                <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:2,background:K.accent}}/> Recurring</div>
+                <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:10,height:10,borderRadius:2,background:K.warning}}/> Big-ticket</div>
+              </div>
+            </div>
+
+            {/* Big-ticket timeline */}
+            {bigTickets.length>0&&<div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:20}}>
+              <h3 style={{fontSize:15,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:12}}>🔮 Major Expenses on the Horizon</h3>
+              {bigTickets.sort((a,b)=>a.year-b.year).map((b,i)=>(
+                <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 0",borderBottom:i<bigTickets.length-1?"1px solid "+K.border:""}}>
+                  <span style={{fontSize:22,flexShrink:0}}>{b.icon}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:600,fontFamily:sf,color:K.text}}>{b.name}</div>
+                    <div style={{fontSize:11,color:K.textMuted,fontFamily:sf}}>~{yearLabels[b.year]}{b.system?" · "+b.system:""}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:15,fontWeight:700,fontFamily:sf,color:b.urgency==="high"?K.danger:K.warning}}>${b.est.toLocaleString()}</div>
+                    {b.urgency==="high"&&<div style={{fontSize:10,color:K.danger,fontFamily:sf}}>Approaching</div>}
+                  </div>
+                </div>
+              ))}
+            </div>}
+
+            {/* Tips */}
+            {!homeProfile.yearBuilt&&<div style={{background:K.warning+"12",border:"1.5px solid "+K.warning+"44",borderRadius:K.radius,padding:"12px 16px",marginBottom:16,fontSize:13,fontFamily:sf,color:K.text}}>
+              💡 <strong>Tip:</strong> Fill in your <span style={{color:K.accent,cursor:"pointer",textDecoration:"underline"}} onClick={()=>setView("home-profile")}>property details</span> (especially year built) for more accurate big-ticket predictions.
+            </div>}
+          </div>;
+        })()}
+
+        {/* ═══ RECEIPT SCAN ═══ */}
+        {view==="receipt-scan"&&receiptScan&&<div style={S.content}>
+          {receiptScan.stage==="uploading"&&<div style={{textAlign:"center",padding:"60px 20px"}}>
+            <div style={{fontSize:48,marginBottom:16,animation:"celebration-pop 0.5s ease-out"}}>🧾</div>
+            <h2 style={{...S.formTitle,marginBottom:8}}>Uploading Receipt...</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf}}>{receiptScan.fileName}</p>
+          </div>}
+
+          {receiptScan.stage==="parsing"&&<div style={{textAlign:"center",padding:"60px 20px"}}>
+            <div style={{fontSize:48,marginBottom:16}}>🤖</div>
+            <h2 style={{...S.formTitle,marginBottom:8}}>Reading Receipt...</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6}}>AI is extracting vendor, date, costs, and matching to your systems.</p>
+            <div style={{marginTop:20,height:4,background:K.border,borderRadius:2,maxWidth:200,margin:"20px auto 0",overflow:"hidden"}}><div style={{width:"60%",height:"100%",background:K.accent,borderRadius:2,animation:"manual-progress 2s ease-in-out infinite"}}/></div>
+          </div>}
+
+          {receiptScan.stage==="error"&&<div style={{textAlign:"center",padding:"60px 20px"}}>
+            <div style={{fontSize:48,marginBottom:16}}>⚠️</div>
+            <h2 style={{...S.formTitle,marginBottom:8,color:K.danger}}>Scan Failed</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6,maxWidth:360,margin:"0 auto 20px"}}>{receiptScan.error}</p>
+            <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+              <button style={S.submitBtn} onClick={handleReceiptFileSelect}>Try Another</button>
+              <button style={S.modalBtnAlt} onClick={()=>{setReceiptScan(null);setView("dashboard");}}>Cancel</button>
+            </div>
+          </div>}
+
+          {receiptScan.stage==="preview"&&receiptScan.data&&(()=>{
+            const r = receiptScan;
+            const d = r.data;
+            return <div>
+              <h2 style={S.formTitle}>🧾 Receipt Details</h2>
+
+              {/* Extracted info */}
+              <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div>
+                    {d.vendor&&<div style={{fontSize:18,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>{d.vendor}</div>}
+                    {d.date&&<div style={{fontSize:13,color:K.textMuted,fontFamily:sf}}>{formatDate(d.date)}</div>}
+                  </div>
+                  <div style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.accent}}>${(d.total||0).toFixed(2)}</div>
+                </div>
+                {d.items&&d.items.length>0&&<div style={{borderTop:"1px solid "+K.border,paddingTop:10}}>
+                  {d.items.map((item,i)=><div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:13,fontFamily:sf,color:K.text}}>
+                    <span>{item.description}</span>
+                    {item.cost>0&&<span style={{color:K.textMuted,fontWeight:600}}>${item.cost.toFixed(2)}</span>}
+                  </div>)}
+                </div>}
+                {d.notes&&<div style={{marginTop:10,fontSize:12,color:K.textMuted,fontFamily:sf,fontStyle:"italic"}}>{d.notes}</div>}
+              </div>
+
+              {/* Match to system/task */}
+              <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,marginBottom:16}}>
+                <h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:10}}>Log to System & Task</h3>
+                <div style={S.formGroup}>
+                  <label style={S.label}>System</label>
+                  <select style={S.input} value={r.selectedSystemId} onChange={e=>setReceiptScan({...r,selectedSystemId:e.target.value,selectedTaskId:""})}>
+                    <option value="">— Don't link to a system —</option>
+                    {systems.map(s=><option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
+                  </select>
+                </div>
+                {r.selectedSystemId&&<div style={S.formGroup}>
+                  <label style={S.label}>Task</label>
+                  <select style={S.input} value={r.selectedTaskId} onChange={e=>setReceiptScan({...r,selectedTaskId:e.target.value})}>
+                    <option value="">— Don't link to a task —</option>
+                    {(systems.find(s=>s.id===r.selectedSystemId)?.tasks||[]).map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                  </select>
+                </div>}
+                {r.selectedSystemId&&r.selectedTaskId&&<div style={{background:"#2E7D3212",borderRadius:8,padding:"10px 12px",fontSize:13,fontFamily:sf,color:"#2E7D32",marginTop:8}}>
+                  ✓ Will mark task complete on {d.date?formatDate(d.date):"today"}{d.total>0?" and log $"+d.total.toFixed(2)+" to budget":""}
+                </div>}
+                {r.selectedSystemId&&!r.selectedTaskId&&d.total>0&&<div style={{background:K.warning+"12",borderRadius:8,padding:"10px 12px",fontSize:13,fontFamily:sf,color:K.warning,marginTop:8}}>
+                  💰 Will log ${d.total.toFixed(2)} to your budget (no task linked)
+                </div>}
+              </div>
+
+              {r.matchedSystem&&<div style={{background:K.accentLight,border:"1px solid "+K.accent+"44",borderRadius:8,padding:"10px 12px",marginBottom:16,fontSize:12,fontFamily:sf,color:K.accent}}>
+                🤖 AI matched this to: <strong>{r.matchedSystem.icon} {r.matchedSystem.name}</strong>{r.matchedTask?" → "+r.matchedTask.name:""}
+              </div>}
+
+              <div style={{display:"flex",gap:10}}>
+                <button style={{...S.submitBtn,flex:2}} onClick={()=>confirmReceiptLog(r)}>{r.selectedTaskId?"✓ Log Completion + Cost":"💰 Log to Budget"}</button>
+                <button style={{...S.modalBtnAlt,flex:1,marginTop:8}} onClick={()=>{setReceiptScan(null);setView("dashboard");}}>Cancel</button>
+              </div>
+            </div>;
+          })()}
         </div>}
 
 {/* ═══ PORTFOLIO VIEW ═══ */}
