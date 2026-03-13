@@ -9,7 +9,7 @@ const LEGACY_STORAGE_KEY = "upkeep-data-v1";
 const LEGACY_ONBOARDED_KEY = "upkeep-onboarded";
 const THEME_KEY = "homesked-theme";
 const TIER_KEY = "homesked-tier";
-const STRIPE_LANDLORD_LINK = "https://buy.stripe.com/test_28E00bfD2c2hfrW9eB1Nu02";
+const STRIPE_LANDLORD_LINK_BASE = "https://buy.stripe.com/test_28E00bfD2c2hfrW9eB1Nu02";
 
 // ── System templates ────────────────────────────────────────────────
 const SYSTEM_TEMPLATES = [
@@ -505,6 +505,30 @@ export default function App() {
     }
   };
 
+  // ── Tier helpers (server-side enforcement) ──
+  const loadTierFromCloud = async (uid) => {
+    if (!supabase) return null;
+    try {
+      const { data, error } = await supabase.from("subscriptions").select("tier, status, cancel_at_period_end, current_period_end").eq("id", uid).maybeSingle();
+      if (error) { console.error("Tier load error:", error); return null; }
+      if (data) {
+        const effectiveTier = (data.tier === "landlord" && ["active", "trialing"].includes(data.status)) ? "landlord" : "free";
+        setUserTier(effectiveTier);
+        return effectiveTier;
+      }
+    } catch (e) { console.error("Tier load error:", e); }
+    return null;
+  };
+  const pollTierFromCloud = async (uid, maxAttempts = 10) => {
+    // Stripe webhook may take a few seconds — poll until tier updates
+    for (let i = 0; i < maxAttempts; i++) {
+      const tier = await loadTierFromCloud(uid);
+      if (tier === "landlord") return "landlord";
+      await new Promise(r => setTimeout(r, 2000)); // wait 2s between attempts
+    }
+    return "free";
+  };
+
   // ── Photo helpers ──
   const compressImage = (file, maxW = 1200) => new Promise((res) => {
     const reader = new FileReader();
@@ -643,6 +667,7 @@ export default function App() {
     localStorage.setItem(ONBOARDED_KEY, "true");
     setView("dashboard");
     loadProfile(data.user.id);
+    loadTierFromCloud(data.user.id);
     showToast("Signed in ✓");
   };
   const handleForgot = async () => {
@@ -657,6 +682,7 @@ export default function App() {
   const handleLogout = async () => {
     if (supabase) await supabase.auth.signOut();
     setUser(null);
+    setUserTier("free");
     setShowAccount(false);
     setOnboarded(false);
     setShowLanding(true);
@@ -683,9 +709,28 @@ export default function App() {
     // Check for Stripe upgrade redirect
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get("upgrade") === "success") {
-      setUserTier("landlord");
       window.history.replaceState({}, "", window.location.pathname);
-      setTimeout(() => { setToast("🎉 Welcome to HomeSked Landlord! Multi-property unlocked."); setTimeout(()=>setToast(null), 4000); }, 500);
+      // Optimistically show landlord while we verify with server
+      setUserTier("landlord");
+      setTimeout(() => { setToast("🎉 Verifying your upgrade..."); setTimeout(()=>setToast(null), 3000); }, 300);
+      // Poll server to confirm webhook has processed
+      const verifyUpgrade = async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.user) {
+            const confirmedTier = await pollTierFromCloud(session.user.id);
+            if (confirmedTier === "landlord") {
+              setToast("🎉 Welcome to HomeSked Landlord! Multi-property unlocked.");
+              setTimeout(()=>setToast(null), 4000);
+            } else {
+              // Webhook may not have fired yet — keep landlord for now, recheck next session
+              console.warn("Tier not yet confirmed server-side, will recheck on next login");
+            }
+          }
+        } catch (e) { console.error("Upgrade verify error:", e); }
+      };
+      if (supabase) verifyUpgrade();
+      else { setTimeout(() => { setToast("🎉 Welcome to HomeSked Landlord! Multi-property unlocked."); setTimeout(()=>setToast(null), 4000); }, 500); }
     }
     // Badge + notification check
     const checkOverdue = () => {
@@ -716,6 +761,7 @@ export default function App() {
       if (session?.user) {
         setUser(session.user);
         loadProfile(session.user.id);
+        loadTierFromCloud(session.user.id);
         loadFromCloud(session.user.id).then(cloudData => {
           if (cloudData && cloudData.length > 0) {
             setHomes(cloudData);
@@ -731,6 +777,7 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
         setUser(session.user);
+        loadTierFromCloud(session.user.id);
         try {
           const cloudData = await loadFromCloud(session.user.id);
           if (cloudData && cloudData.length > 0) {
@@ -745,6 +792,7 @@ export default function App() {
         } catch (e) { console.error("Auth sync error:", e); }
       } else {
         setUser(null);
+        setUserTier("free");
       }
     });
     return () => { subscription.unsubscribe(); clearInterval(notifInterval); };
@@ -2078,7 +2126,7 @@ export default function App() {
                 ✓ Property comparison<br/>
                 ✓ Priority support
               </div>
-              <button style={{...S.submitBtn,marginTop:16,padding:"12px"}} onClick={()=>{window.open(STRIPE_LANDLORD_LINK,"_blank");}}>Upgrade Now</button>
+              <button style={{...S.submitBtn,marginTop:16,padding:"12px"}} onClick={()=>{if(!user){setAuthView("login");setView("auth");showToast("Sign in first to upgrade");return;}const link=STRIPE_LANDLORD_LINK_BASE+"?client_reference_id="+encodeURIComponent(user.id);window.open(link,"_blank");}}>Upgrade Now</button>
             </div>
           </div>
 
