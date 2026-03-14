@@ -11,6 +11,7 @@ const THEME_KEY = "homesked-theme";
 const TIER_KEY = "homesked-tier";
 const STRIPE_LANDLORD_LINK_BASE = "https://buy.stripe.com/test_14A7sD8aAeap7ZufCZ1Nu03";
 const STRIPE_PRO_LINK_BASE = "https://buy.stripe.com/test_eVq4grgH65DTgw076t1Nu04";
+const AI_PROXY_URL = "https://yezagcjokysffndgcqkg.supabase.co/functions/v1/ai-proxy";
 
 // ── System templates ────────────────────────────────────────────────
 const SYSTEM_TEMPLATES = [
@@ -1260,7 +1261,7 @@ export default function App() {
       const contentBlock = mimeType.includes("pdf")
         ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
         : { type: "image", source: { type: "base64", media_type: mimeType, data: b64 } };
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch(AI_PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1333,7 +1334,7 @@ export default function App() {
         ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } }
         : { type: "image", source: { type: "base64", media_type: mimeType, data: b64 } };
       const sysContext = systems.map(s => s.name + " (" + s.tasks.map(t => t.name).join(", ") + ")").join("; ");
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch(AI_PROXY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2792,7 +2793,7 @@ export default function App() {
               const newMsgs=[...chatMessages,{role:"user",content:msg}];setChatMessages(newMsgs);setChatLoading(true);
               try{
                 const ctx="You are HomeSked's maintenance advisor. The user has these systems: "+systems.map(s=>s.icon+" "+s.name+" ("+s.tasks.length+" tasks, "+s.tasks.filter(t=>{const d=daysUntil(getNextDue(t));return d!==null&&d<0;}).length+" overdue)").join(", ")+". Annual est: $"+annualCost.toFixed(0)+". "+(homeProfile.yearBuilt?"Home built "+homeProfile.yearBuilt+". ":"")+(homeProfile.roof?"Roof: "+homeProfile.roof+". ":"")+(homeProfile.waterSource?"Water: "+homeProfile.waterSource+". ":"")+"Budget: $"+(budget.monthly*12).toFixed(0)+"/yr, spent $"+budget.spent.toFixed(0)+". Be concise, practical, specific to their home.";
-                const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:ctx,messages:newMsgs.slice(-10).map(m=>({role:m.role,content:m.content}))})});
+                const res=await fetch(AI_PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:ctx,messages:newMsgs.slice(-10).map(m=>({role:m.role,content:m.content}))})});
                 const data=await res.json();
                 const reply=data.content?.map(c=>c.text||"").join("")||"Sorry, I couldn't process that.";
                 setChatMessages(prev=>[...prev,{role:"assistant",content:reply}]);
@@ -2805,7 +2806,7 @@ export default function App() {
               const newMsgs=[...chatMessages,{role:"user",content:msg}];setChatMessages(newMsgs);setChatLoading(true);
               try{
                 const ctx="You are HomeSked's maintenance advisor. The user has these systems: "+systems.map(s=>s.icon+" "+s.name+" ("+s.tasks.length+" tasks)").join(", ")+". Annual est: $"+annualCost.toFixed(0)+". Be concise and practical.";
-                const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:ctx,messages:newMsgs.slice(-10).map(m=>({role:m.role,content:m.content}))})});
+                const res=await fetch(AI_PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:ctx,messages:newMsgs.slice(-10).map(m=>({role:m.role,content:m.content}))})});
                 const data=await res.json();
                 const reply=data.content?.map(c=>c.text||"").join("")||"Sorry, I couldn't process that.";
                 setChatMessages(prev=>[...prev,{role:"assistant",content:reply}]);
