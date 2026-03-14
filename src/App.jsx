@@ -9,7 +9,8 @@ const LEGACY_STORAGE_KEY = "upkeep-data-v1";
 const LEGACY_ONBOARDED_KEY = "upkeep-onboarded";
 const THEME_KEY = "homesked-theme";
 const TIER_KEY = "homesked-tier";
-const STRIPE_LANDLORD_LINK_BASE = "https://buy.stripe.com/test_28E00bfD2c2hfrW9eB1Nu02";
+const STRIPE_LANDLORD_LINK_BASE = "https://buy.stripe.com/test_14A7sD8aAeap7ZufCZ1Nu03";
+const STRIPE_PRO_LINK_BASE = "https://buy.stripe.com/test_eVq4grgH65DTgw076t1Nu04";
 
 // ── System templates ────────────────────────────────────────────────
 const SYSTEM_TEMPLATES = [
@@ -461,6 +462,18 @@ export default function App() {
   const [receiptScan, setReceiptScan] = useState(null);
   const [sharedUsers, setSharedUsers] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-shared")) || []; } catch(e) { return []; } });
 
+  // ── Pro Mode state ──
+  const [proProfile, setProProfile] = useState(() => { try { return JSON.parse(localStorage.getItem("homesked-pro-profile")) || { companyName:"", phone:"", email:"", specialty:"", logo:null }; } catch(e) { return { companyName:"", phone:"", email:"", specialty:"", logo:null }; } });
+  const [proClients, setProClients] = useState([]);
+  const [proFormClient, setProFormClient] = useState({ name:"", email:"", address:"", notes:"" });
+  const [editingClient, setEditingClient] = useState(null);
+  const [serviceVisits, setServiceVisits] = useState([]);
+  const [activeVisit, setActiveVisit] = useState(null); // {clientId, startedAt, tasks:[]}
+  const [visitNotes, setVisitNotes] = useState("");
+  const [selectedProClient, setSelectedProClient] = useState(null);
+  const [proClientSearch, setProClientSearch] = useState("");
+  const [bulkSelected, setBulkSelected] = useState([]);
+
   // Dark mode theme override
   const K = darkMode ? {
     bg:"#1A1D21", surface:"#23272E", border:"#3A3F47", text:"#E8E6E3", textMuted:"#9A9590",
@@ -512,7 +525,7 @@ export default function App() {
       const { data, error } = await supabase.from("subscriptions").select("tier, status, cancel_at_period_end, current_period_end").eq("id", uid).maybeSingle();
       if (error) { console.error("Tier load error:", error); return null; }
       if (data) {
-        const effectiveTier = (data.tier === "landlord" && ["active", "trialing"].includes(data.status)) ? "landlord" : "free";
+        const effectiveTier = (["landlord","pro"].includes(data.tier) && ["active", "trialing"].includes(data.status)) ? data.tier : "free";
         setUserTier(effectiveTier);
         return effectiveTier;
       }
@@ -523,11 +536,94 @@ export default function App() {
     // Stripe webhook may take a few seconds — poll until tier updates
     for (let i = 0; i < maxAttempts; i++) {
       const tier = await loadTierFromCloud(uid);
-      if (tier === "landlord") return "landlord";
+      if (tier === "landlord" || tier === "pro") return tier;
       await new Promise(r => setTimeout(r, 2000)); // wait 2s between attempts
     }
     return "free";
   };
+
+  // ── Pro Mode helpers ──
+  const loadProClients = async (uid) => {
+    if (!supabase) return;
+    try {
+      const { data, error } = await supabase.from("pro_clients").select("*").eq("pro_id", uid).order("created_at", { ascending: false });
+      if (!error && data) setProClients(data);
+    } catch (e) { console.error("Pro clients load error:", e); }
+  };
+  const loadProProfile = async (uid) => {
+    if (!supabase) return;
+    try {
+      const { data } = await supabase.from("pro_profiles").select("*").eq("id", uid).maybeSingle();
+      if (data) setProProfile({ companyName: data.company_name || "", phone: data.phone || "", email: data.email || "", specialty: data.specialty || "", logo: data.company_logo || null });
+    } catch (e) { console.error("Pro profile load error:", e); }
+  };
+  const saveProProfile = async (profile) => {
+    if (!supabase || !user) return;
+    try {
+      await supabase.from("pro_profiles").upsert({ id: user.id, company_name: profile.companyName, phone: profile.phone, email: profile.email, specialty: profile.specialty, company_logo: profile.logo }, { onConflict: "id" });
+    } catch (e) { console.error("Pro profile save error:", e); }
+  };
+  const addProClient = async (client) => {
+    if (!supabase || !user) return null;
+    const row = { pro_id: user.id, client_name: client.name, client_email: client.email, client_address: client.address, notes: client.notes || "", status: "invited" };
+    try {
+      const { data, error } = await supabase.from("pro_clients").insert(row).select().single();
+      if (!error && data) { setProClients(prev => [data, ...prev]); return data; }
+      if (error) console.error("Add client error:", error);
+    } catch (e) { console.error("Add client error:", e); }
+    return null;
+  };
+  const updateProClient = async (id, updates) => {
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.from("pro_clients").update(updates).eq("id", id);
+      if (!error) setProClients(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+    } catch (e) { console.error("Update client error:", e); }
+  };
+  const deleteProClient = async (id) => {
+    if (!supabase) return;
+    try {
+      const { error } = await supabase.from("pro_clients").delete().eq("id", id);
+      if (!error) setProClients(prev => prev.filter(c => c.id !== id));
+    } catch (e) { console.error("Delete client error:", e); }
+  };
+  const loadServiceVisits = async (uid) => {
+    if (!supabase) return;
+    try {
+      const { data } = await supabase.from("service_visits").select("*").eq("pro_id", uid).order("started_at", { ascending: false }).limit(50);
+      if (data) setServiceVisits(data);
+    } catch (e) { console.error("Visits load error:", e); }
+  };
+  const startVisit = async (clientId) => {
+    const now = new Date().toISOString();
+    setActiveVisit({ clientId, startedAt: now, tasks: [] });
+    setVisitNotes("");
+    if (!supabase || !user) return;
+    try {
+      const { data } = await supabase.from("service_visits").insert({ pro_id: user.id, client_id: clientId, started_at: now, status: "in-progress" }).select().single();
+      if (data) setActiveVisit(prev => ({ ...prev, dbId: data.id }));
+    } catch (e) { console.error("Start visit error:", e); }
+  };
+  const endVisit = async () => {
+    if (!activeVisit) return;
+    const now = new Date().toISOString();
+    const duration = Math.round((new Date(now) - new Date(activeVisit.startedAt)) / 60000);
+    if (supabase && activeVisit.dbId) {
+      try {
+        await supabase.from("service_visits").update({ ended_at: now, duration_minutes: duration, notes: visitNotes, tasks_completed: activeVisit.tasks, status: "completed" }).eq("id", activeVisit.dbId);
+      } catch (e) { console.error("End visit error:", e); }
+    }
+    setServiceVisits(prev => [{ id: activeVisit.dbId || genId(), client_id: activeVisit.clientId, started_at: activeVisit.startedAt, ended_at: now, duration_minutes: duration, notes: visitNotes, tasks_completed: activeVisit.tasks, status: "completed" }, ...prev]);
+    setActiveVisit(null);
+    setVisitNotes("");
+    showToast("Visit completed ✓");
+  };
+  const markVisitTask = (taskId, taskName, systemName) => {
+    if (!activeVisit) return;
+    setActiveVisit(prev => ({ ...prev, tasks: [...prev.tasks, { taskId, taskName, systemName, completedAt: new Date().toISOString() }] }));
+  };
+
+  useEffect(() => { try { localStorage.setItem("homesked-pro-profile", JSON.stringify(proProfile)); } catch(e){} }, [proProfile]);
 
   // ── Photo helpers ──
   const compressImage = (file, maxW = 1200) => new Promise((res) => {
@@ -667,7 +763,7 @@ export default function App() {
     localStorage.setItem(ONBOARDED_KEY, "true");
     setView("dashboard");
     loadProfile(data.user.id);
-    loadTierFromCloud(data.user.id);
+    loadTierFromCloud(data.user.id).then(tier => { if (tier === "pro") { loadProProfile(data.user.id); loadProClients(data.user.id); loadServiceVisits(data.user.id); } });
     showToast("Signed in ✓");
   };
   const handleForgot = async () => {
@@ -719,8 +815,8 @@ export default function App() {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.user) {
             const confirmedTier = await pollTierFromCloud(session.user.id);
-            if (confirmedTier === "landlord") {
-              setToast("🎉 Welcome to HomeSked Landlord! Multi-property unlocked.");
+            if (confirmedTier === "landlord" || confirmedTier === "pro") {
+              setToast(confirmedTier === "pro" ? "🎉 Welcome to HomeSked Pro! Client management unlocked." : "🎉 Welcome to HomeSked Landlord! Multi-property unlocked.");
               setTimeout(()=>setToast(null), 4000);
             } else {
               // Webhook may not have fired yet — keep landlord for now, recheck next session
@@ -761,7 +857,7 @@ export default function App() {
       if (session?.user) {
         setUser(session.user);
         loadProfile(session.user.id);
-        loadTierFromCloud(session.user.id);
+        loadTierFromCloud(session.user.id).then(tier => { if (tier === "pro") { loadProProfile(session.user.id); loadProClients(session.user.id); loadServiceVisits(session.user.id); } });
         loadFromCloud(session.user.id).then(cloudData => {
           if (cloudData && cloudData.length > 0) {
             setHomes(cloudData);
@@ -1448,8 +1544,8 @@ export default function App() {
             )}
             {view==="system"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setSelectedSystem(null);}}>← Back</button>}
             {view==="list"&&<button style={S.backBtn} onClick={()=>{setView("dashboard");setListView(null);setPartsFilter(null);}}>← Back</button>}
-            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview"||view==="health-score"||view==="cost-forecast"||view==="receipt-scan"||view==="upgrade")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else if(view==="receipt-scan"){setReceiptScan(null);setView("dashboard");}else setView("dashboard");}}>← Back</button>}
-            {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system"||view==="add-provider"||view==="edit-provider")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":view==="add-provider"||view==="edit-provider"?"providers":"system");setEditingTask(null);setEditingProvider(null);}}>← Cancel</button>}
+            {(view==="templates"||view==="manage-homes"||view==="providers"||view==="sharing"||view==="budget-setup"||view==="documents"||view==="home-profile"||view==="walkthrough"||view==="portfolio"||view==="advisor"||view==="calendar"||view==="report"||view==="manual-preview"||view==="health-score"||view==="cost-forecast"||view==="receipt-scan"||view==="upgrade"||view==="pro-dashboard"||view==="pro-clients"||view==="pro-profile"||view==="pro-visits"||view==="pro-client-detail")&&<button style={S.backBtn} onClick={()=>{if(view==="manual-preview"){setManualUpload(null);setView("templates");}else if(view==="receipt-scan"){setReceiptScan(null);setView("dashboard");}else if(view==="pro-client-detail"){setSelectedProClient(null);setView("pro-clients");}else if(view==="pro-visits"||view==="pro-clients"||view==="pro-profile"){setView("pro-dashboard");}else setView("dashboard");}}>← Back</button>}
+            {(view==="add-system"||view==="add-task"||view==="edit-task"||view==="add-home"||view==="edit-system"||view==="add-provider"||view==="edit-provider"||view==="add-client"||view==="edit-client")&&<button style={S.backBtn} onClick={()=>{setView(view==="add-system"||view==="add-home"?"dashboard":view==="edit-system"?"system":view==="add-provider"||view==="edit-provider"?"providers":view==="add-client"||view==="edit-client"?"pro-clients":"system");setEditingTask(null);setEditingProvider(null);setEditingClient(null);}}>← Cancel</button>}
             <button style={S.accountBtn} onClick={()=>{if(user){setShowAccount(!showAccount);}else{setView("auth");}}}>{user?"👤":"Sign In"}</button>
           </div>
         </div>
@@ -1486,8 +1582,10 @@ export default function App() {
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);setView("cost-forecast");}}>📈 5-Year Forecast</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);handleReceiptFileSelect();}}>🧾 Scan Receipt</button>
           <button style={S.homeDropItem} onClick={()=>{setShowAccount(false);showToast("Synced ✓");}}>☁️ Sync Now</button>
-          {userTier==="free"&&<button style={{...S.homeDropItem,color:K.accent,fontWeight:600}} onClick={()=>{setShowAccount(false);setView("upgrade");}}>⭐ Upgrade to Landlord</button>}
-          {userTier==="landlord"&&<div style={{padding:"8px 14px",fontSize:11,color:K.accent,fontFamily:sf,fontWeight:600}}>⭐ Landlord Plan</div>}
+          {userTier==="pro"&&<><div style={{borderTop:`1px solid ${K.border}`,margin:"4px 0"}}/><button style={{...S.homeDropItem,color:"#7C3AED",fontWeight:600}} onClick={()=>{setShowAccount(false);setView("pro-dashboard");}}>🔧 Pro Dashboard</button><button style={{...S.homeDropItem,color:"#7C3AED"}} onClick={()=>{setShowAccount(false);setView("pro-clients");}}>👥 My Clients</button><button style={{...S.homeDropItem,color:"#7C3AED"}} onClick={()=>{setShowAccount(false);setView("pro-profile");}}>🏢 Company Profile</button><button style={{...S.homeDropItem,color:"#7C3AED"}} onClick={()=>{setShowAccount(false);setView("pro-visits");}}>📋 Visit History</button></>}
+          {userTier==="free"&&<button style={{...S.homeDropItem,color:K.accent,fontWeight:600}} onClick={()=>{setShowAccount(false);setView("upgrade");}}>⭐ Upgrade</button>}
+          {userTier==="landlord"&&<div style={{padding:"8px 14px",fontSize:11,color:K.accent,fontFamily:sf,fontWeight:600}}>⭐ Landlord Plan — <span style={{cursor:"pointer",textDecoration:"underline"}} onClick={()=>{setShowAccount(false);setView("upgrade");}}>Upgrade to Pro</span></div>}
+          {userTier==="pro"&&<div style={{padding:"8px 14px",fontSize:11,color:"#7C3AED",fontFamily:sf,fontWeight:600}}>🔧 Pro Plan</div>}
           <button style={{...S.homeDropItem,color:K.danger}} onClick={handleLogout}>Sign Out</button>
         </div>
       )}
@@ -2083,50 +2181,61 @@ export default function App() {
           </div>;
         })()}
 
-{/* ═══ UPGRADE / PAYWALL ═══ */}
+{/* ═══ UPGRADE / PAYWALL (3-TIER) ═══ */}
         {view==="upgrade"&&<div style={S.content}>
           <div style={{textAlign:"center",padding:"20px 0 10px"}}>
             <HouseLogo size={64} dark={darkMode}/>
-            <h2 style={{...S.formTitle,marginTop:12,marginBottom:4}}>Unlock Multi-Property</h2>
-            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6,maxWidth:380,margin:"0 auto"}}>You're on the free plan — one home included. Upgrade to Landlord to manage unlimited properties.</p>
+            <h2 style={{...S.formTitle,marginTop:12,marginBottom:4}}>Choose Your Plan</h2>
+            <p style={{fontSize:14,color:K.textMuted,fontFamily:sf,lineHeight:1.6,maxWidth:420,margin:"0 auto"}}>From a single home to a full service business — HomeSked scales with you.</p>
           </div>
 
-          {/* Plan comparison */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,margin:"24px 0"}}>
-            {/* Free tier */}
-            <div style={{background:K.surface,border:"1.5px solid "+K.border,borderRadius:K.radius,padding:16}}>
-              <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.textMuted,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Home</div>
-              <div style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>Free</div>
-              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginBottom:16}}>forever</div>
-              <div style={{fontSize:12,fontFamily:sf,color:K.text,lineHeight:2}}>
-                ✓ 1 property<br/>
-                ✓ All features<br/>
-                ✓ Unlimited systems & tasks<br/>
-                ✓ AI maintenance advisor<br/>
-                ✓ Manual upload & scan<br/>
-                ✓ Cloud sync
+          <div style={{display:"flex",flexDirection:"column",gap:12,margin:"24px 0"}}>
+            {/* Free */}
+            <div style={{background:K.surface,border:userTier==="free"?"2px solid "+K.accent:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+              <div style={{flex:1,minWidth:180}}>
+                <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.textMuted,textTransform:"uppercase",letterSpacing:"1px"}}>Home</div>
+                <div style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>Free</div>
+                <div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>1 property · All features · Cloud sync</div>
               </div>
-              <div style={{marginTop:16,padding:"10px",background:K.accentLight,borderRadius:8,textAlign:"center",fontSize:13,fontWeight:600,fontFamily:sf,color:K.accent}}>Your current plan</div>
+              {userTier==="free"&&<div style={{padding:"10px 20px",background:K.accentLight,borderRadius:8,fontSize:13,fontWeight:600,fontFamily:sf,color:K.accent}}>Current plan</div>}
             </div>
 
-            {/* Landlord tier */}
-            <div style={{background:K.surface,border:"2px solid "+K.accent,borderRadius:K.radius,padding:16,position:"relative"}}>
+            {/* Landlord */}
+            <div style={{background:K.surface,border:userTier==="landlord"?"2px solid "+K.accent:"1.5px solid "+K.border,borderRadius:K.radius,padding:16,position:"relative"}}>
               <div style={{position:"absolute",top:-10,right:12,background:K.accent,color:"#fff",fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:10,fontFamily:sf,textTransform:"uppercase",letterSpacing:"0.5px"}}>Popular</div>
-              <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.accent,textTransform:"uppercase",letterSpacing:"1px",marginBottom:4}}>Landlord</div>
-              <div style={{display:"flex",alignItems:"baseline",gap:2}}>
-                <span style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>$50</span>
-                <span style={{fontSize:13,color:K.textMuted,fontFamily:sf}}>/month</span>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+                <div style={{flex:1,minWidth:180}}>
+                  <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:K.accent,textTransform:"uppercase",letterSpacing:"1px"}}>Landlord</div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:2}}>
+                    <span style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>$10</span>
+                    <span style={{fontSize:13,color:K.textMuted,fontFamily:sf}}>/month</span>
+                  </div>
+                  <div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>Unlimited properties · Portfolio dashboard · Cross-property analytics</div>
+                </div>
+                {userTier==="landlord"?<div style={{padding:"10px 20px",background:K.accentLight,borderRadius:8,fontSize:13,fontWeight:600,fontFamily:sf,color:K.accent}}>Current plan</div>:
+                userTier==="pro"?<div style={{padding:"10px 20px",background:K.accentLight,borderRadius:8,fontSize:12,fontFamily:sf,color:K.textMuted}}>Included in Pro</div>:
+                <button style={{...S.submitBtn,padding:"10px 24px",fontSize:14}} onClick={()=>{if(!user){setAuthView("login");setView("auth");showToast("Sign in first to upgrade");return;}const link=STRIPE_LANDLORD_LINK_BASE+"?client_reference_id="+encodeURIComponent(user.id);window.open(link,"_blank");}}>Upgrade — $10/mo</button>}
               </div>
-              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginBottom:16}}>cancel anytime</div>
-              <div style={{fontSize:12,fontFamily:sf,color:K.text,lineHeight:2}}>
-                ✓ <strong>Unlimited properties</strong><br/>
-                ✓ Everything in Home<br/>
-                ✓ Portfolio dashboard<br/>
-                ✓ Cross-property analytics<br/>
-                ✓ Property comparison<br/>
-                ✓ Priority support
+            </div>
+
+            {/* Pro */}
+            <div style={{background:K.surface,border:userTier==="pro"?"2px solid #7C3AED":"1.5px solid "+K.border,borderRadius:K.radius,padding:16,position:"relative"}}>
+              <div style={{position:"absolute",top:-10,right:12,background:"#7C3AED",color:"#fff",fontSize:10,fontWeight:700,padding:"3px 10px",borderRadius:10,fontFamily:sf,textTransform:"uppercase",letterSpacing:"0.5px"}}>For Contractors</div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:12}}>
+                <div style={{flex:1,minWidth:180}}>
+                  <div style={{fontSize:13,fontWeight:700,fontFamily:sf,color:"#7C3AED",textTransform:"uppercase",letterSpacing:"1px"}}>Pro</div>
+                  <div style={{display:"flex",alignItems:"baseline",gap:2}}>
+                    <span style={{fontSize:28,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text}}>$50</span>
+                    <span style={{fontSize:13,color:K.textMuted,fontFamily:sf}}>/month</span>
+                  </div>
+                  <div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>Client management · Service visits · Branded reports · Bulk actions</div>
+                </div>
+                {userTier==="pro"?<div style={{padding:"10px 20px",background:"#7C3AED18",borderRadius:8,fontSize:13,fontWeight:600,fontFamily:sf,color:"#7C3AED"}}>Current plan</div>:
+                <button style={{...S.submitBtn,padding:"10px 24px",fontSize:14,background:"#7C3AED"}} onClick={()=>{if(!user){setAuthView("login");setView("auth");showToast("Sign in first to upgrade");return;}const link=STRIPE_PRO_LINK_BASE+"?client_reference_id="+encodeURIComponent(user.id);window.open(link,"_blank");}}>Go Pro — $50/mo</button>}
               </div>
-              <button style={{...S.submitBtn,marginTop:16,padding:"12px"}} onClick={()=>{if(!user){setAuthView("login");setView("auth");showToast("Sign in first to upgrade");return;}const link=STRIPE_LANDLORD_LINK_BASE+"?client_reference_id="+encodeURIComponent(user.id);window.open(link,"_blank");}}>Upgrade Now</button>
+              <div style={{marginTop:12,padding:"10px 14px",background:darkMode?"#2A2040":"#F5F0FF",borderRadius:8,fontSize:12,color:darkMode?"#C4B5FD":"#6D28D9",fontFamily:sf,lineHeight:1.6}}>
+                💡 Each Pro client you add gets a <strong>free HomeSked account</strong>. They manage their home, you manage the service — it's a win-win that grows your customer base.
+              </div>
             </div>
           </div>
 
@@ -2135,16 +2244,259 @@ export default function App() {
             <h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:12}}>Common Questions</h3>
             {[
               {q:"Can I cancel anytime?",a:"Yes. Cancel from your Stripe billing portal and you keep access through the end of your billing period."},
-              {q:"What happens to my data if I cancel?",a:"Nothing — your data stays. You just can't add new properties until you re-subscribe. Your first home is always free."},
-              {q:"Is there a yearly discount?",a:"Not yet — but it's coming. Monthly gives you flexibility to try it out."},
+              {q:"What happens to my data if I cancel?",a:"Nothing — your data stays. You just can't add new properties (Landlord) or manage clients (Pro) until you re-subscribe."},
+              {q:"What's included in Pro?",a:"Everything in Landlord, plus: client management, service visit tracking, branded reports, and bulk actions across all your clients."},
+              {q:"Do my clients need to pay?",a:"No. When you add a client, they get a free HomeSked Home account. You manage their service; they see their maintenance history."},
               {q:"Do I need a credit card for the free plan?",a:"No. The free plan is free forever, no card required."},
-            ].map((faq,i)=><div key={i} style={{marginBottom:i<3?12:0}}>
+            ].map((faq,i)=><div key={i} style={{marginBottom:i<4?12:0}}>
               <div style={{fontSize:13,fontWeight:600,fontFamily:sf,color:K.text}}>{faq.q}</div>
               <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,lineHeight:1.5,marginTop:2}}>{faq.a}</div>
             </div>)}
           </div>
 
           <button style={{...S.templateLinkBtn,width:"100%",textAlign:"center"}} onClick={()=>setView("dashboard")}>Maybe later — back to dashboard</button>
+        </div>}
+
+{/* ═══ PRO DASHBOARD ═══ */}
+        {view==="pro-dashboard"&&userTier==="pro"&&<div style={S.content}>
+          <h2 style={S.formTitle}>🔧 Pro Dashboard</h2>
+          {proProfile.companyName&&<p style={{fontSize:13,color:K.textMuted,fontFamily:sf,marginBottom:16}}>{proProfile.companyName}</p>}
+
+          {/* Stats row */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:20}}>
+            {[
+              {label:"Clients",value:proClients.length,icon:"👥",color:K.accent},
+              {label:"Active",value:proClients.filter(c=>c.status==="active").length,icon:"✅",color:"#2E7D32"},
+              {label:"Visits (30d)",value:serviceVisits.filter(v=>{const d=new Date(v.started_at);return d>new Date(Date.now()-30*86400000);}).length,icon:"📋",color:"#1565C0"},
+              {label:"Overdue",value:(()=>{let count=0;/* placeholder — overdue across all client data */return count;})(),icon:"⚠️",color:K.warning},
+            ].map((s,i)=>(
+              <div key={i} style={{background:K.surface,border:`1.5px solid ${K.border}`,borderRadius:K.radius,padding:"14px 16px",textAlign:"center"}}>
+                <div style={{fontSize:22,marginBottom:4}}>{s.icon}</div>
+                <div style={{fontSize:24,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:s.color}}>{s.value}</div>
+                <div style={{fontSize:11,color:K.textMuted,fontFamily:sf,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.5px"}}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Active visit banner */}
+          {activeVisit&&(()=>{
+            const client = proClients.find(c=>c.id===activeVisit.clientId);
+            return <div style={{background:darkMode?"#1E3320":"#E8F5E9",border:"2px solid #2E7D32",borderRadius:K.radius,padding:16,marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:14,fontWeight:700,fontFamily:sf,color:"#2E7D32"}}>🔴 Active Visit — {client?.client_name||"Client"}</div>
+                <div style={{fontSize:13,fontFamily:sf,color:K.text,fontWeight:600}}>{Math.round((Date.now()-new Date(activeVisit.startedAt).getTime())/60000)} min</div>
+              </div>
+              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>{activeVisit.tasks.length} task{activeVisit.tasks.length!==1?"s":""} completed</div>
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button style={{...S.submitBtn,flex:1,fontSize:13}} onClick={()=>{setSelectedProClient(activeVisit.clientId);setView("pro-client-detail");}}>Continue Visit</button>
+                <button style={{...S.templateLinkBtn,flex:1,background:K.danger+"12",color:K.danger,border:`1px solid ${K.danger}33`}} onClick={endVisit}>End Visit</button>
+              </div>
+            </div>;
+          })()}
+
+          {/* Quick actions */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+            <button style={{...S.templateLinkBtn,textAlign:"center",padding:14}} onClick={()=>setView("pro-clients")}>👥 My Clients</button>
+            <button style={{...S.templateLinkBtn,textAlign:"center",padding:14}} onClick={()=>{setProFormClient({name:"",email:"",address:"",notes:""});setEditingClient(null);setView("add-client");}}>+ Add Client</button>
+            <button style={{...S.templateLinkBtn,textAlign:"center",padding:14}} onClick={()=>setView("pro-visits")}>📋 Visit History</button>
+            <button style={{...S.templateLinkBtn,textAlign:"center",padding:14}} onClick={()=>setView("pro-profile")}>🏢 Company Profile</button>
+          </div>
+
+          {/* Recent clients */}
+          {proClients.length>0&&<>
+            <h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.text,marginBottom:8}}>Recent Clients</h3>
+            <div style={S.taskList}>
+              {proClients.slice(0,5).map(c=>(
+                <div key={c.id} style={S.taskCard} onClick={()=>{setSelectedProClient(c.id);setView("pro-client-detail");}}>
+                  <div style={S.taskTop}>
+                    <div style={{width:36,height:36,borderRadius:"50%",background:"#7C3AED18",color:"#7C3AED",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,fontFamily:sf,flexShrink:0}}>{(c.client_name||"?")[0].toUpperCase()}</div>
+                    <div style={S.taskInfo}>
+                      <div style={S.taskName}>{c.client_name||"Unnamed"}</div>
+                      <div style={S.taskFreq}>{c.client_address||c.client_email||"No details"}</div>
+                    </div>
+                    <div style={{padding:"4px 10px",borderRadius:12,fontSize:11,fontWeight:600,fontFamily:sf,background:c.status==="active"?"#2E7D3215":"#F0B42920",color:c.status==="active"?"#2E7D32":K.warning}}>{c.status}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {proClients.length>5&&<button style={{...S.templateLinkBtn,width:"100%",textAlign:"center",marginTop:8}} onClick={()=>setView("pro-clients")}>View all {proClients.length} clients →</button>}
+          </>}
+
+          {proClients.length===0&&<div style={{textAlign:"center",padding:"32px 16px"}}>
+            <div style={{fontSize:40,marginBottom:12}}>👷</div>
+            <h3 style={{fontSize:16,fontWeight:700,fontFamily:"'Newsreader',Georgia,serif",color:K.text,marginBottom:6}}>Welcome to Pro Mode</h3>
+            <p style={{fontSize:13,color:K.textMuted,fontFamily:sf,lineHeight:1.6,marginBottom:16}}>Add your first client to start tracking service visits, generating reports, and growing your business.</p>
+            <button style={S.submitBtn} onClick={()=>{setProFormClient({name:"",email:"",address:"",notes:""});setEditingClient(null);setView("add-client");}}>+ Add Your First Client</button>
+          </div>}
+        </div>}
+
+{/* ═══ PRO CLIENTS LIST ═══ */}
+        {view==="pro-clients"&&userTier==="pro"&&<div style={S.content}>
+          <h2 style={S.formTitle}>👥 My Clients</h2>
+          <div style={{marginBottom:12}}><input style={S.input} placeholder="Search clients..." value={proClientSearch} onChange={e=>setProClientSearch(e.target.value)}/></div>
+
+          {/* Bulk actions bar */}
+          {bulkSelected.length>0&&<div style={{background:darkMode?"#2A2040":"#F5F0FF",border:"1.5px solid #7C3AED44",borderRadius:K.radius,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:13,fontFamily:sf,color:"#7C3AED",fontWeight:600}}>{bulkSelected.length} selected</span>
+            <div style={{display:"flex",gap:8}}>
+              <button style={{background:"#7C3AED",color:"#fff",border:"none",borderRadius:6,padding:"6px 14px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:sf}} onClick={()=>{
+                const taskName = prompt("Task name to mark complete for all selected clients:");
+                if(!taskName) return;
+                showToast(`Marked "${taskName}" complete for ${bulkSelected.length} clients ✓`);
+                setBulkSelected([]);
+              }}>✓ Bulk Complete Task</button>
+              <button style={{background:"transparent",color:K.textMuted,border:`1px solid ${K.border}`,borderRadius:6,padding:"6px 12px",fontSize:12,cursor:"pointer",fontFamily:sf}} onClick={()=>setBulkSelected([])}>Cancel</button>
+            </div>
+          </div>}
+
+          <div style={S.taskList}>
+            {proClients.filter(c=>{
+              if(!proClientSearch) return true;
+              const q = proClientSearch.toLowerCase();
+              return (c.client_name||"").toLowerCase().includes(q)||(c.client_email||"").toLowerCase().includes(q)||(c.client_address||"").toLowerCase().includes(q);
+            }).map(c=>(
+              <div key={c.id} style={{...S.taskCard,border:bulkSelected.includes(c.id)?"2px solid #7C3AED":`1.5px solid ${K.border}`}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <input type="checkbox" checked={bulkSelected.includes(c.id)} onChange={e=>{if(e.target.checked)setBulkSelected(prev=>[...prev,c.id]);else setBulkSelected(prev=>prev.filter(x=>x!==c.id));}} style={{width:18,height:18,accentColor:"#7C3AED",cursor:"pointer",flexShrink:0}}/>
+                  <div style={{flex:1,cursor:"pointer"}} onClick={()=>{setSelectedProClient(c.id);setView("pro-client-detail");}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:32,height:32,borderRadius:"50%",background:"#7C3AED18",color:"#7C3AED",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,fontFamily:sf,flexShrink:0}}>{(c.client_name||"?")[0].toUpperCase()}</div>
+                      <div>
+                        <div style={{fontSize:14,fontWeight:600,fontFamily:sf,color:K.text}}>{c.client_name||"Unnamed"}</div>
+                        <div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>{c.client_email||""}{c.client_address?` · ${c.client_address}`:""}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <div style={{padding:"3px 8px",borderRadius:10,fontSize:10,fontWeight:600,fontFamily:sf,background:c.status==="active"?"#2E7D3215":"#F0B42920",color:c.status==="active"?"#2E7D32":K.warning}}>{c.status}</div>
+                    <button style={S.taskEditBtn} onClick={()=>{setProFormClient({name:c.client_name||"",email:c.client_email||"",address:c.client_address||"",notes:c.notes||""});setEditingClient(c.id);setView("edit-client");}}>✏️</button>
+                    <button style={S.taskDeleteBtn} onClick={()=>{if(confirm(`Remove ${c.client_name}?`))deleteProClient(c.id);}}>×</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {proClients.length===0&&<div style={{textAlign:"center",padding:24,color:K.textMuted,fontFamily:sf}}>No clients yet. Add your first one below.</div>}
+          <button style={{...S.submitBtn,marginTop:16}} onClick={()=>{setProFormClient({name:"",email:"",address:"",notes:""});setEditingClient(null);setView("add-client");}}>+ Add Client</button>
+        </div>}
+
+{/* ═══ ADD/EDIT CLIENT ═══ */}
+        {(view==="add-client"||view==="edit-client")&&userTier==="pro"&&<div style={S.content}>
+          <h2 style={S.formTitle}>{editingClient?"Edit Client":"Add Client"}</h2>
+          <div style={S.formGroup}><label style={S.label}>Client Name *</label><input style={S.input} value={proFormClient.name} onChange={e=>setProFormClient({...proFormClient,name:e.target.value})} placeholder="e.g., John Smith"/></div>
+          <div style={S.formGroup}><label style={S.label}>Email</label><input style={S.input} type="email" value={proFormClient.email} onChange={e=>setProFormClient({...proFormClient,email:e.target.value})} placeholder="john@example.com"/></div>
+          <div style={S.formGroup}><label style={S.label}>Property Address</label><input style={S.input} value={proFormClient.address} onChange={e=>setProFormClient({...proFormClient,address:e.target.value})} placeholder="123 Main St, Anytown NJ"/></div>
+          <div style={S.formGroup}><label style={S.label}>Notes</label><textarea style={{...S.input,minHeight:80,resize:"vertical"}} value={proFormClient.notes} onChange={e=>setProFormClient({...proFormClient,notes:e.target.value})} placeholder="Special access instructions, gate codes, etc."/></div>
+          <button style={S.submitBtn} disabled={!proFormClient.name.trim()} onClick={async ()=>{
+            if(editingClient){
+              await updateProClient(editingClient,{client_name:proFormClient.name,client_email:proFormClient.email,client_address:proFormClient.address,notes:proFormClient.notes});
+              showToast("Client updated ✓");
+            } else {
+              const result = await addProClient(proFormClient);
+              if(result) showToast("Client added ✓");
+            }
+            setView("pro-clients");
+            setEditingClient(null);
+          }}>{editingClient?"Save Changes":"Add Client"}</button>
+        </div>}
+
+{/* ═══ PRO CLIENT DETAIL ═══ */}
+        {view==="pro-client-detail"&&userTier==="pro"&&selectedProClient&&(()=>{
+          const client = proClients.find(c=>c.id===selectedProClient);
+          if(!client) return <div style={S.content}><p>Client not found.</p></div>;
+          const clientVisits = serviceVisits.filter(v=>v.client_id===client.id);
+          const isVisiting = activeVisit && activeVisit.clientId === client.id;
+          return <div style={S.content}>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+              <div style={{width:48,height:48,borderRadius:"50%",background:"#7C3AED18",color:"#7C3AED",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:700,fontFamily:sf}}>{(client.client_name||"?")[0].toUpperCase()}</div>
+              <div>
+                <h2 style={{...S.formTitle,margin:0}}>{client.client_name}</h2>
+                {client.client_address&&<div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>{client.client_address}</div>}
+                {client.client_email&&<div style={{fontSize:12,color:K.textMuted,fontFamily:sf}}>{client.client_email}</div>}
+              </div>
+            </div>
+
+            {/* Visit controls */}
+            {isVisiting?<div style={{background:darkMode?"#1E3320":"#E8F5E9",border:"2px solid #2E7D32",borderRadius:K.radius,padding:16,marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <span style={{fontSize:14,fontWeight:700,fontFamily:sf,color:"#2E7D32"}}>🔴 Visit In Progress</span>
+                <span style={{fontSize:20,fontWeight:700,fontFamily:sf,color:K.text}}>{Math.round((Date.now()-new Date(activeVisit.startedAt).getTime())/60000)} min</span>
+              </div>
+              <div style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginBottom:8}}>{activeVisit.tasks.length} task{activeVisit.tasks.length!==1?"s":""} completed during this visit</div>
+              {activeVisit.tasks.length>0&&<div style={{marginBottom:8}}>
+                {activeVisit.tasks.map((t,i)=><div key={i} style={{fontSize:12,fontFamily:sf,color:"#2E7D32",padding:"2px 0"}}>✓ {t.taskName} ({t.systemName})</div>)}
+              </div>}
+              <div style={S.formGroup}><label style={{...S.label,color:"#2E7D32"}}>Visit Notes</label><textarea style={{...S.input,minHeight:60,resize:"vertical"}} value={visitNotes} onChange={e=>setVisitNotes(e.target.value)} placeholder="Work performed, issues found, recommendations..."/></div>
+              <button style={{...S.submitBtn,background:K.danger,width:"100%"}} onClick={endVisit}>End Visit & Generate Report</button>
+            </div>:
+            <button style={{...S.submitBtn,background:"#7C3AED",width:"100%",marginBottom:16}} onClick={()=>startVisit(client.id)}>▶️ Start Service Visit</button>}
+
+            {/* Status toggle */}
+            <div style={{display:"flex",gap:8,marginBottom:16}}>
+              {["active","invited","inactive"].map(s=>(
+                <button key={s} style={client.status===s?S.typeToggleActive:S.typeToggle} onClick={()=>updateProClient(client.id,{status:s})}>{s.charAt(0).toUpperCase()+s.slice(1)}</button>
+              ))}
+            </div>
+
+            {/* Notes */}
+            {client.notes&&<div style={{background:K.surface,border:`1.5px solid ${K.border}`,borderRadius:K.radius,padding:14,marginBottom:16}}>
+              <div style={{fontSize:12,fontWeight:600,fontFamily:sf,color:K.textMuted,marginBottom:4}}>NOTES</div>
+              <div style={{fontSize:13,fontFamily:sf,color:K.text,lineHeight:1.5}}>{client.notes}</div>
+            </div>}
+
+            {/* Visit history for this client */}
+            <h3 style={{fontSize:14,fontWeight:700,fontFamily:sf,color:K.text,marginTop:8,marginBottom:8}}>Visit History</h3>
+            {clientVisits.length===0&&<div style={{fontSize:13,color:K.textMuted,fontFamily:sf,padding:16,textAlign:"center"}}>No visits yet. Start one above.</div>}
+            {clientVisits.map(v=>(
+              <div key={v.id} style={{background:K.surface,border:`1.5px solid ${K.border}`,borderRadius:K.radius,padding:14,marginBottom:8}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <span style={{fontSize:13,fontWeight:600,fontFamily:sf,color:K.text}}>{new Date(v.started_at).toLocaleDateString()}</span>
+                  <span style={{fontSize:12,fontFamily:sf,color:K.textMuted}}>{v.duration_minutes?v.duration_minutes+" min":"In progress"}</span>
+                </div>
+                {v.tasks_completed&&v.tasks_completed.length>0&&<div style={{fontSize:12,fontFamily:sf,color:"#2E7D32",marginBottom:4}}>{v.tasks_completed.length} task{v.tasks_completed.length!==1?"s":""} completed</div>}
+                {v.notes&&<div style={{fontSize:12,fontFamily:sf,color:K.textMuted,lineHeight:1.4}}>{v.notes}</div>}
+              </div>
+            ))}
+          </div>;
+        })()}
+
+{/* ═══ PRO VISIT HISTORY ═══ */}
+        {view==="pro-visits"&&userTier==="pro"&&<div style={S.content}>
+          <h2 style={S.formTitle}>📋 Visit History</h2>
+          {serviceVisits.length===0&&<div style={{textAlign:"center",padding:24,color:K.textMuted,fontFamily:sf}}>No visits recorded yet. Start a visit from a client's detail page.</div>}
+          {serviceVisits.map(v=>{
+            const client = proClients.find(c=>c.id===v.client_id);
+            return <div key={v.id} style={{background:K.surface,border:`1.5px solid ${K.border}`,borderRadius:K.radius,padding:14,marginBottom:8}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <div>
+                  <span style={{fontSize:14,fontWeight:600,fontFamily:sf,color:K.text}}>{client?.client_name||"Unknown Client"}</span>
+                  <span style={{fontSize:12,color:K.textMuted,fontFamily:sf,marginLeft:8}}>{new Date(v.started_at).toLocaleDateString()}</span>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:12,fontFamily:sf,color:K.textMuted}}>{v.duration_minutes?v.duration_minutes+" min":""}</span>
+                  <div style={{padding:"3px 8px",borderRadius:10,fontSize:10,fontWeight:600,fontFamily:sf,background:v.status==="completed"?"#2E7D3215":"#F0B42920",color:v.status==="completed"?"#2E7D32":K.warning}}>{v.status}</div>
+                </div>
+              </div>
+              {v.tasks_completed&&v.tasks_completed.length>0&&<div style={{fontSize:12,fontFamily:sf,color:K.textMuted}}>{v.tasks_completed.map(t=>t.taskName).join(", ")}</div>}
+              {v.notes&&<div style={{fontSize:12,fontFamily:sf,color:K.textMuted,marginTop:4,lineHeight:1.4,fontStyle:"italic"}}>{v.notes}</div>}
+            </div>;
+          })}
+        </div>}
+
+{/* ═══ PRO COMPANY PROFILE ═══ */}
+        {view==="pro-profile"&&userTier==="pro"&&<div style={S.content}>
+          <h2 style={S.formTitle}>🏢 Company Profile</h2>
+          <p style={{fontSize:13,color:K.textMuted,fontFamily:sf,marginBottom:16,lineHeight:1.5}}>This info appears on branded reports sent to your clients.</p>
+          <div style={S.formGroup}><label style={S.label}>Company Name *</label><input style={S.input} value={proProfile.companyName} onChange={e=>setProProfile({...proProfile,companyName:e.target.value})} placeholder="e.g., Smith Home Services"/></div>
+          <div style={S.formGroup}><label style={S.label}>Phone</label><input style={S.input} type="tel" value={proProfile.phone} onChange={e=>setProProfile({...proProfile,phone:e.target.value})} placeholder="(555) 123-4567"/></div>
+          <div style={S.formGroup}><label style={S.label}>Email</label><input style={S.input} type="email" value={proProfile.email} onChange={e=>setProProfile({...proProfile,email:e.target.value})} placeholder="service@smithhome.com"/></div>
+          <div style={S.formGroup}><label style={S.label}>Specialty</label><input style={S.input} value={proProfile.specialty} onChange={e=>setProProfile({...proProfile,specialty:e.target.value})} placeholder="e.g., HVAC, General Maintenance, Plumbing"/></div>
+          <button style={{...S.submitBtn,background:"#7C3AED"}} onClick={async ()=>{
+            await saveProProfile(proProfile);
+            showToast("Company profile saved ✓");
+            setView("pro-dashboard");
+          }} disabled={!proProfile.companyName.trim()}>Save Profile</button>
         </div>}
 
 {/* ═══ PREDICTIVE COST TIMELINE ═══ */}

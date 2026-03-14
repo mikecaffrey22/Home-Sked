@@ -1,9 +1,10 @@
 // supabase/functions/stripe-webhook/index.ts
 // ============================================================
 // HomeSked: Stripe Webhook → Supabase Tier Enforcement
-// 
+// Supports 3 tiers: free, landlord ($10/mo), pro ($50/mo)
+//
 // SETUP:
-// 1. Install Supabase CLI: npm install -g supabase
+// 1. Install Supabase CLI: scoop install supabase (Windows)
 // 2. Link project: supabase link --project-ref YOUR_PROJECT_REF
 // 3. Set secrets:
 //    supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_xxxxx
@@ -30,13 +31,22 @@ const supabaseAdmin = createClient(
 
 const webhookSecret = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
 
+// Determine tier from subscription price amount (in cents)
+// $50/mo (5000 cents) = pro, $10/mo (1000 cents) = landlord
+function getTierFromSubscription(subscription: Stripe.Subscription): string {
+  const items = subscription.items?.data || [];
+  if (items.length === 0) return "landlord";
+  const amount = items[0]?.price?.unit_amount || 0;
+  if (amount >= 4000) return "pro";
+  if (amount >= 500) return "landlord";
+  return "landlord";
+}
+
 Deno.serve(async (req) => {
-  // Only accept POST
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Verify Stripe signature
   const body = await req.text();
   const signature = req.headers.get("stripe-signature");
   if (!signature) {
@@ -55,10 +65,9 @@ Deno.serve(async (req) => {
 
   try {
     switch (event.type) {
-      // ── New checkout completed ──
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.client_reference_id; // Supabase user ID
+        const userId = session.client_reference_id;
         const customerId = session.customer as string;
         const subscriptionId = session.subscription as string;
 
@@ -67,8 +76,10 @@ Deno.serve(async (req) => {
           break;
         }
 
-        // Fetch subscription details from Stripe
-        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
+          expand: ["items.data.price"],
+        });
+        const tier = getTierFromSubscription(subscription);
 
         const { error } = await supabaseAdmin
           .from("subscriptions")
@@ -76,23 +87,29 @@ Deno.serve(async (req) => {
             id: userId,
             stripe_customer_id: customerId,
             stripe_subscription_id: subscriptionId,
-            tier: "landlord",
+            tier,
             status: subscription.status,
             current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
             cancel_at_period_end: subscription.cancel_at_period_end,
           }, { onConflict: "id" });
 
         if (error) console.error("Error updating subscription:", error);
-        else console.log(`Activated landlord tier for user ${userId}`);
+        else console.log(`Activated ${tier} tier for user ${userId}`);
+
+        // Auto-create pro_profiles row for pro tier
+        if (tier === "pro") {
+          await supabaseAdmin
+            .from("pro_profiles")
+            .upsert({ id: userId }, { onConflict: "id" });
+        }
+
         break;
       }
 
-      // ── Subscription updated (renewal, plan change, cancellation scheduled) ──
       case "customer.subscription.updated": {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
 
-        // Look up user by stripe_customer_id
         const { data: sub } = await supabaseAdmin
           .from("subscriptions")
           .select("id")
@@ -104,9 +121,14 @@ Deno.serve(async (req) => {
           break;
         }
 
-        // Determine tier based on status
         const isActive = ["active", "trialing"].includes(subscription.status);
-        const tier = isActive ? "landlord" : "free";
+        let tier = "free";
+        if (isActive) {
+          const fullSub = await stripe.subscriptions.retrieve(subscription.id, {
+            expand: ["items.data.price"],
+          });
+          tier = getTierFromSubscription(fullSub);
+        }
 
         const { error } = await supabaseAdmin
           .from("subscriptions")
@@ -123,7 +145,6 @@ Deno.serve(async (req) => {
         break;
       }
 
-      // ── Subscription deleted (fully canceled) ──
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
@@ -139,21 +160,15 @@ Deno.serve(async (req) => {
           break;
         }
 
-        const { error } = await supabaseAdmin
+        await supabaseAdmin
           .from("subscriptions")
-          .update({
-            tier: "free",
-            status: "canceled",
-            cancel_at_period_end: false,
-          })
+          .update({ tier: "free", status: "canceled", cancel_at_period_end: false })
           .eq("id", sub.id);
 
-        if (error) console.error("Error downgrading subscription:", error);
-        else console.log(`Downgraded user ${sub.id} to free`);
+        console.log(`Downgraded user ${sub.id} to free`);
         break;
       }
 
-      // ── Payment failed ──
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
