@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">HomeSked</string>
+    <string name="title_activity_main">HomeSked</string>
+    <string name="package_name">casa.homesked</string>
+    <string name="custom_url_scheme">casa.homesked</string>
+</resources>
